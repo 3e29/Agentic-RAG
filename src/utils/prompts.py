@@ -349,13 +349,14 @@ AVAILABLE TOOLS:
 
 5. semantic_search - Vector similarity search
    Input: {"query": "<text>"}
-   Useful for: Conceptual queries, meanings, themes, specific hadith text
+   Useful for: Conceptual queries, meanings, themes
    Strength: Finds related content even without exact term matches
+   WARNING: Can be distracted by common descriptive words. Use with caution for proper nouns.
 
 6. hybrid_search - Combined keyword + semantic with RRF fusion
    Input: {"query": "<text>"}
-   Useful for: General queries, balanced precision and recall
-   Strength: Best of both approaches
+   Useful for: General queries, proper nouns, historical events, locations, balanced precision and recall
+   Strength: Best of both approaches - prevents semantic distraction via keyword grounding
 
 7. relax_filters - Remove strict filters to broaden search
    Input: {"level": 1|2|3}
@@ -365,29 +366,47 @@ AVAILABLE TOOLS:
    Input: {"reason": "<why stopping>"}
    Use when: Sufficient results found OR search options exhausted
 
-DECISION PROCESS:
-Analyze the query and decide:
-- Is it a SPECIFIC HADITH TEXT lookup? (e.g. "hadith about marriage", "حديث الصدقة")
-  -> Use semantic_search or hybrid_search. Keyword search may match wrong hadiths with similar words.
-- Is it an Arabic query about a GENERAL TOPIC? -> expand_query might help.
-- Does it have a clear TOPIC? Consider find_chapter for focused results.
-- Is it CONCEPTUAL/thematic? Consider semantic_search.
+CRITICAL DECISION RULES (Priority Order):
 
-QUERY REFINEMENT STRATEGIES (Critical for precision):
+1. PREFER HYBRID_SEARCH for:
+   - Proper nouns (Hudaybiyyah, Badr, Khaibar, Tabuk, أحد، بدر، الحديبية)
+   - Historical events (Treaty of..., غزوة، صلح، فتح)
+   - Specific locations (Mecca, Medina, مكة، المدينة)
+   - Person names (Abu Bakr, Aisha, أبو بكر، عائشة)
+   - Specific titles (Farewell Pilgrimage, حجة الوداع)
+   
+   WHY: Hybrid search combines keyword precision (finds "Hudaybiyyah") with semantic understanding
+   (understands context). This prevents "semantic distraction" where the model matches common
+   words like "long", "hadith" instead of the critical historical term.
+
+2. QUERY CLEANING (Strip distracting descriptive terms BEFORE search):
+   - Remove length descriptors: "long", "short", "longest", "shortest" (طويل، قصير، أطول، أقصر)
+   - Remove generic words: "hadith", "narration", "story" (حديث، رواية، قصة)
+   - Extract CORE TERMS ONLY: "the long hadith of Hudaybiyyah" → "Hudaybiyyah"
+   
+   Examples:
+   - "ما هو الحديث الطويل عن الحديبية" → Clean to: "الحديبية"
+   - "the long hadith about the treaty of Hudaybiyyah" → Clean to: "Hudaybiyyah treaty"
+   - "حديث قصير عن الصلاة" → Clean to: "الصلاة"
+
+3. SEARCH TOOL SELECTION:
+   - hybrid_search: DEFAULT for proper nouns, historical events, specific persons/places
+   - semantic_search: ONLY for abstract concepts without specific names (patience, kindness, justice)
+   - keyword_search: ONLY for hadith numbers, narrator-only queries, exact phrases
+
+QUERY REFINEMENT STRATEGIES:
 - "Who is the narrator of [Text]": Search for "[Text]" ONLY (remove "Who is narrator").
 - "من هو راوي حديث [نص]": Search for "[نص]" ONLY.
 - "Hadith about [Topic]": Search for "[Topic]" ONLY.
-- Remove question words (Who, What, ما, من, كيف, كم) to improve search precision.
+- Remove question words (Who, What, Where, ما, من, كيف, كم, أين) before search.
+- Strip length descriptors (long, short, longest, shortest, طويل, قصير, أطول, أقصر).
 
-SEARCH TOOL SELECTION:
-- semantic_search: Best for specific hadith text (finds meaning, not just words)
-- hybrid_search: Good balance when unsure
-- keyword_search: Best for narrator names, hadith numbers, book names, unique distinctive phrases
+COMMON FAILURE PATTERNS TO AVOID:
+❌ BAD: Using semantic_search for "long hadith of Hudaybiyyah" → Gets distracted by "long" and "hadith"
+✅ GOOD: Clean to "Hudaybiyyah", use hybrid_search → Finds the actual historical text
 
-
-RECOMMENDED PATTERN for Arabic hadith text queries:
-- Use semantic_search (Arabic text has many variations, semantic matching is more robust).
-- keyword_search often matches wrong hadiths that share common words like "الأعمال".
+❌ BAD: Keeping "طويل" in search → Matches short hadiths that mention length
+✅ GOOD: Remove "طويل", search core term → Finds the actual content
 
 YOU DECIDE the best approach. There is no fixed order.
 

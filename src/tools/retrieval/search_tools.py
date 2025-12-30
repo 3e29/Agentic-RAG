@@ -99,6 +99,135 @@ ENGLISH_STOPWORDS = {
 # No synonym dictionaries - avoiding overfitting
 # Using proper NLP techniques instead: normalization, stemming, prefix stripping
 
+# Historical events and proper nouns for keyword-heavy search
+PROPER_NOUNS_ARABIC = {
+    'الحديبية', 'حديبية', 'بدر', 'أحد', 'الخندق', 'خندق', 'خيبر', 'تبوك',
+    'مكة', 'المدينة', 'الطائف', 'حراء', 'ثور', 'عرفات', 'منى', 'مزدلفة',
+    'أبو بكر', 'عمر', 'عثمان', 'علي', 'عائشة', 'خديجة', 'فاطمة', 'الحسن', 'الحسين',
+    'حجة الوداع', 'الوداع', 'الإسراء', 'المعراج', 'الفتح', 'صلح', 'معاهدة', 'غزوة',
+}
+
+PROPER_NOUNS_ENGLISH = {
+    'hudaybiyyah', 'hudaybiyya', 'badr', 'uhud', 'khandaq', 'trench', 'khaybar', 'tabuk',
+    'mecca', 'makkah', 'medina', 'madinah', 'taif', 'hira', 'thawr', 'arafat', 'mina', 'muzdalifah',
+    'abu bakr', 'umar', 'uthman', 'ali', 'aisha', 'khadija', 'fatima', 'hasan', 'husayn',
+    'farewell pilgrimage', 'isra', 'miraj', 'conquest', 'treaty', 'battle', 'expedition',
+}
+
+# Descriptive terms to strip from queries (cause semantic distraction)
+DESCRIPTIVE_NOISE_ARABIC = {
+    'طويل', 'طويلة', 'أطول', 'قصير', 'قصيرة', 'أقصر',
+    'حديث', 'رواية', 'قصة', 'نص',
+}
+
+DESCRIPTIVE_NOISE_ENGLISH = {
+    'long', 'longest', 'short', 'shortest',
+    'hadith', 'narration', 'story', 'text', 'passage',
+}
+
+
+def contains_proper_noun(text: str) -> bool:
+    """
+    Detect if query contains proper nouns (historical events, places, persons).
+    
+    Returns True if query contains high-information terms that benefit from
+    keyword-heavy search to avoid semantic distraction.
+    """
+    text_lower = text.lower()
+    
+    # Check Arabic proper nouns
+    for noun in PROPER_NOUNS_ARABIC:
+        if noun in text_lower:
+            return True
+    
+    # Check English proper nouns
+    for noun in PROPER_NOUNS_ENGLISH:
+        if noun in text_lower:
+            return True
+    
+    return False
+
+
+def clean_query_for_search(text: str) -> str:
+    """
+    Remove descriptive noise terms that cause semantic distraction.
+    
+    Strips adjectives like 'long', 'short' and generic terms like 'hadith'
+    that distract embedding models from the core query intent.
+    
+    Args:
+        text: Original query
+        
+    Returns:
+        Cleaned query with noise terms removed
+    """
+    words = text.split()
+    cleaned_words = []
+    
+    for word in words:
+        word_lower = word.lower().strip('.,;:!?')
+        
+        # For Arabic words, also check without "ال" prefix
+        word_stripped = word_lower
+        if word_lower.startswith('ال'):
+            word_stripped = word_lower[2:]  # Remove "ال" prefix
+        
+        # Skip if it's descriptive noise (check both with and without prefix)
+        if (word_lower in DESCRIPTIVE_NOISE_ARABIC or 
+            word_stripped in DESCRIPTIVE_NOISE_ARABIC or
+            word_lower in DESCRIPTIVE_NOISE_ENGLISH):
+            continue
+        
+        cleaned_words.append(word)
+    
+    cleaned = ' '.join(cleaned_words).strip()
+    
+    # Log if cleaning made a difference
+    if cleaned != text:
+        logger.info(f"Query cleaning: '{text}' -> '{cleaned}'")
+    
+    return cleaned if cleaned else text  # Fallback to original if everything stripped
+
+
+def calculate_alpha_for_query(text: str) -> float:
+    """
+    Calculate optimal alpha (semantic weight) for RRF based on query characteristics.
+    
+    Alpha values:
+    - 0.5 = balanced (default)
+    - 0.3-0.4 = keyword-heavy (for proper nouns, historical events)
+    - 0.6-0.7 = semantic-heavy (for abstract concepts)
+    
+    Args:
+        text: Query text
+        
+    Returns:
+        Alpha value between 0 and 1 (higher = more semantic weight)
+    """
+    # Check for proper nouns (prefer keyword matching)
+    if contains_proper_noun(text):
+        logger.info(f"Query contains proper noun, using keyword-heavy alpha=0.35")
+        return 0.35  # Keyword-heavy for proper nouns
+    
+    # Check if query has many keywords (prefer keyword matching)
+    text_lower = text.lower()
+    arabic_words = len([w for w in text.split() if any('\u0600' <= c <= '\u06FF' for c in w)])
+    english_words = len([w for w in text.split() if w.isascii() and len(w) > 2])
+    
+    total_words = arabic_words + english_words
+    
+    if total_words >= 5:
+        # Long query with many terms - keyword matching helps
+        logger.info(f"Long query ({total_words} words), using keyword-heavy alpha=0.4")
+        return 0.4
+    elif total_words <= 2:
+        # Short query - semantic matching helps
+        logger.info(f"Short query ({total_words} words), using semantic-heavy alpha=0.6")
+        return 0.6
+    
+    # Default balanced
+    return 0.5
+
 
 def extract_arabic_keywords(text: str) -> List[str]:
     """
@@ -1094,10 +1223,22 @@ def hybrid_search(
     Combines semantic and keyword search results using RRF algorithm.
     Both semantic and keyword searches are traced separately in LangSmith.
     
+    **Dynamic Alpha Adjustment**:
+    If alpha is default (0.5), automatically adjusts based on query:
+    - Proper nouns/historical events: alpha=0.35 (keyword-heavy)
+    - Long queries (5+ words): alpha=0.4 (keyword-heavy)
+    - Short queries (1-2 words): alpha=0.6 (semantic-heavy)
+    - Default: alpha=0.5 (balanced)
+    
+    **Query Cleaning**:
+    Strips distracting descriptive terms (long, short, hadith) that cause
+    semantic distraction where embeddings match common words instead of
+    the critical query terms.
+    
     Args:
         query: Search query text
         k: Number of results to return
-        alpha: Semantic weight (0=keyword only, 1=semantic only)
+        alpha: Semantic weight (0=keyword only, 1=semantic only). If 0.5 (default), auto-adjusted.
         filters: Optional metadata filters
         semantic_tool: Semantic search tool instance
         keyword_tool: Keyword search tool instance
@@ -1106,7 +1247,18 @@ def hybrid_search(
         HybridSearchResult with fused rankings
     """
     start_time = time.time()
-    logger.info(f"Hybrid search: '{query[:100]}...' (k={k}, alpha={alpha})")
+    
+    # Clean query (remove distracting descriptive terms)
+    cleaned_query = clean_query_for_search(query)
+    
+    # Dynamic alpha adjustment if using default
+    original_alpha = alpha
+    if alpha == 0.5:
+        alpha = calculate_alpha_for_query(cleaned_query)
+        if alpha != original_alpha:
+            logger.info(f"Alpha adjusted: {original_alpha} -> {alpha}")
+    
+    logger.info(f"Hybrid search: '{cleaned_query[:100]}...' (k={k}, alpha={alpha})")
     
     # Initialize tools if not provided
     if semantic_tool is None:
@@ -1119,8 +1271,8 @@ def hybrid_search(
     
     # Execute both searches with explicit tracing
     # Using the tool's __call__ method ensures LangSmith traces each branch
-    semantic_result = _execute_semantic_search(semantic_tool, query, fetch_k, filters)
-    keyword_result = _execute_keyword_search(keyword_tool, query, fetch_k, filters)
+    semantic_result = _execute_semantic_search(semantic_tool, cleaned_query, fetch_k, filters)
+    keyword_result = _execute_keyword_search(keyword_tool, cleaned_query, fetch_k, filters)
     
     # Apply Reciprocal Rank Fusion
     fused_documents = _reciprocal_rank_fusion(
@@ -1327,6 +1479,11 @@ async def crosslingual_hybrid_search(
     3. Vector (Arabic): Search Arabic docs with original Arabic query
     4. RRF: Fuse all three result sets with weighted scores
     
+    **Query Cleaning**:
+    Strips distracting descriptive terms (long, short, hadith) that cause
+    semantic distraction where embeddings match common words instead of
+    the critical query terms (e.g., historical names like \"Hudaybiyyah\").
+    
     This addresses the E5 model's weaker Arabic semantic understanding
     by leveraging its stronger English understanding while still capturing
     Arabic keyword matches.
@@ -1343,9 +1500,13 @@ async def crosslingual_hybrid_search(
     from collections import defaultdict
     
     start_time = time.time()
-    is_arabic = is_arabic_text(query)
     
-    logger.info(f"Cross-lingual hybrid search: '{query[:80]}...' (arabic={is_arabic}, k={k})")
+    # Clean query to remove distracting terms
+    cleaned_query = clean_query_for_search(query)
+    
+    is_arabic = is_arabic_text(cleaned_query)
+    
+    logger.info(f"Cross-lingual hybrid search: '{cleaned_query[:80]}...' (arabic={is_arabic}, k={k})")
     
     # Prepare search tasks
     fetch_k = min(k * 3, 100)
@@ -1369,7 +1530,7 @@ async def crosslingual_hybrid_search(
     # ==========================================================================
     if is_arabic:
         # Arabic: Extract Arabic keywords for BM25 on Arabic docs
-        arabic_keywords = extract_arabic_keywords(query)
+        arabic_keywords = extract_arabic_keywords(cleaned_query)
         if arabic_keywords:
             logger.info(f"BM25 Arabic keywords: {arabic_keywords}")
             
@@ -1390,7 +1551,7 @@ async def crosslingual_hybrid_search(
                 logger.info(f"BM25 Arabic found {len(bm25_scores)} matches")
     else:
         # English: Extract English keywords for BM25 on English docs
-        english_keywords = extract_english_keywords(query)
+        english_keywords = extract_english_keywords(cleaned_query)
         if english_keywords:
             logger.info(f"BM25 English keywords: {english_keywords}")
             
@@ -1414,8 +1575,8 @@ async def crosslingual_hybrid_search(
     # ==========================================================================
     english_query = None
     if is_arabic and translate_arabic:
-        # Translate Arabic query to English
-        english_query = await asyncio.to_thread(translate_query_for_search_sync, query)
+        # Translate Arabic query to English (use cleaned query)
+        english_query = await asyncio.to_thread(translate_query_for_search_sync, cleaned_query)
     
     if english_query:
         logger.info(f"English translation: '{english_query[:60]}...'")
@@ -1443,7 +1604,7 @@ async def crosslingual_hybrid_search(
     vector_arabic_scores = await loop.run_in_executor(
         _thread_pool,
         lambda: _vector_search_raw(
-            query=query,
+            query=cleaned_query,  # Use cleaned query
             language='arabic' if is_arabic else None,  # All languages for English queries
             limit=fetch_k,
             embedder=embedder,
@@ -1485,7 +1646,7 @@ async def crosslingual_hybrid_search(
     
     return HybridSearchResult(
         documents=results,
-        query=query,
+        query=cleaned_query,  # Return cleaned query
         semantic_results=[],  # Individual results not tracked
         keyword_results=[],
         alpha=0.5,  # Balanced weighting
@@ -1513,13 +1674,21 @@ def crosslingual_hybrid_search_sync(
     2. Vector (English): Translate query to English, search English docs
     3. Vector (Arabic): Search Arabic docs with original Arabic query
     4. RRF: Fuse all three result sets with weighted scores
+    
+    **Query Cleaning**:
+    Strips distracting descriptive terms (long, short, hadith) that cause
+    semantic distraction.
     """
     from collections import defaultdict
     
     start_time = time.time()
-    is_arabic = is_arabic_text(query)
     
-    logger.info(f"Cross-lingual hybrid search (SYNC): '{query[:80]}...' (arabic={is_arabic}, k={k})")
+    # Clean query to remove distracting terms
+    cleaned_query = clean_query_for_search(query)
+    
+    is_arabic = is_arabic_text(cleaned_query)
+    
+    logger.info(f"Cross-lingual hybrid search (SYNC): '{cleaned_query[:80]}...' (arabic={is_arabic}, k={k})")
     
     # Prepare search
     fetch_k = min(k * 3, 100)
@@ -1542,7 +1711,7 @@ def crosslingual_hybrid_search_sync(
     # ==========================================================================
     if is_arabic:
         # Arabic: Extract Arabic keywords for BM25 on Arabic docs
-        arabic_keywords = extract_arabic_keywords(query)
+        arabic_keywords = extract_arabic_keywords(cleaned_query)
         if arabic_keywords:
             logger.info(f"BM25 Arabic keywords: {arabic_keywords}")
             
@@ -1560,7 +1729,7 @@ def crosslingual_hybrid_search_sync(
                 logger.info(f"BM25 Arabic found {len(bm25_scores)} matches")
     else:
         # English: Extract English keywords for BM25 on English docs
-        english_keywords = extract_english_keywords(query)
+        english_keywords = extract_english_keywords(cleaned_query)
         if english_keywords:
             logger.info(f"BM25 English keywords: {english_keywords}")
             
@@ -1582,7 +1751,7 @@ def crosslingual_hybrid_search_sync(
     # ==========================================================================
     english_query = None
     if is_arabic and translate_arabic:
-        english_query = translate_query_for_search_sync(query)
+        english_query = translate_query_for_search_sync(cleaned_query)  # Use cleaned query
     
     if english_query:
         logger.info(f"English translation: '{english_query[:60]}...'")
@@ -1605,7 +1774,7 @@ def crosslingual_hybrid_search_sync(
     # SEARCH STRATEGY 3: Vector Search (Original query on Arabic docs)
     # ==========================================================================
     vector_arabic_scores = _vector_search_raw(
-        query=query,
+        query=cleaned_query,  # Use cleaned query
         language='arabic' if is_arabic else None,
         limit=fetch_k,
         embedder=embedder,
@@ -1643,7 +1812,7 @@ def crosslingual_hybrid_search_sync(
     
     return HybridSearchResult(
         documents=results,
-        query=query,
+        query=cleaned_query,
         semantic_results=[],
         keyword_results=[],
         alpha=0.5,
