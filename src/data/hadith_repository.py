@@ -108,10 +108,12 @@ class HadithRepository:
         desired_language: Optional[str] = None,
     ) -> List[Document]:
         """
-        Reassemble chunked hadiths into their complete form.
+        Reassemble chunked hadiths into their complete form using BATCH fetching.
         
         When a hadith is too long and was split into multiple chunks during embedding,
         this function fetches all chunks and combines them into the full hadith text.
+        
+        **Optimized**: Uses a single batch query with $in operator instead of N+1 queries.
         
         Args:
             documents: List of Document objects from search results
@@ -132,15 +134,57 @@ class HadithRepository:
         if not reassembly_needed:
             return documents
         
-        logger.info(f"Reassembling {len(reassembly_needed)} chunked hadiths")
+        logger.info(f"Reassembling {len(reassembly_needed)} chunked hadiths (batch mode)")
         
         try:
+            # Group documents by collection for batch fetching
+            docs_by_collection: Dict[str, List[Document]] = {}
+            for doc in reassembly_needed:
+                collection_db_name = self.normalize_collection_name(doc.collection)
+                if collection_db_name not in docs_by_collection:
+                    docs_by_collection[collection_db_name] = []
+                docs_by_collection[collection_db_name].append(doc)
+            
+            # Batch fetch all chunks for all hadiths at once (per collection)
+            all_chunks_map: Dict[Tuple[int, str, str], List[Dict[str, Any]]] = {}
+            
+            for collection_db_name, docs in docs_by_collection.items():
+                # Collect unique hadith IDs for this collection
+                hadith_ids = list(set(doc.hadith_id for doc in docs if doc.hadith_id is not None))
+                
+                if not hadith_ids:
+                    continue
+                
+                # BATCH FETCH: Single query for all hadith IDs using $in operator
+                chunks_data = self.get_chunks_batch(
+                    collection_name=collection_db_name,
+                    hadith_ids=hadith_ids,
+                    language=desired_language,
+                )
+                
+                # Index chunks by (hadith_id, language, collection)
+                for chunk in chunks_data:
+                    key = (
+                        chunk['metadata'].get('hadith_id'),
+                        chunk['metadata'].get('language', 'arabic'),
+                        chunk['metadata'].get('collection', ''),
+                    )
+                    if key not in all_chunks_map:
+                        all_chunks_map[key] = []
+                    all_chunks_map[key].append(chunk)
+            
+            # Sort chunks within each hadith by chunk_index
+            for key in all_chunks_map:
+                all_chunks_map[key].sort(key=lambda x: x['metadata'].get('chunk_index', 0))
+            
+            # Now reassemble documents using the pre-fetched chunks
             reassembled_docs = []
-            reassembled_hadith_ids = set()  # Track which hadiths we've already reassembled
+            reassembled_hadith_ids = set()
             
             for doc in documents:
-                # Skip if already reassembled this hadith
                 hadith_key = (doc.hadith_id, doc.language, doc.collection)
+                
+                # Skip if already reassembled this hadith
                 if hadith_key in reassembled_hadith_ids:
                     continue
                 
@@ -150,59 +194,45 @@ class HadithRepository:
                     reassembled_hadith_ids.add(hadith_key)
                     continue
                 
-                # Need to fetch all chunks for this hadith
-                collection_db_name = self.normalize_collection_name(doc.collection)
+                # Get pre-fetched chunks for this hadith
+                chunks = all_chunks_map.get(hadith_key, [])
                 
-                try:
-                    all_chunks = self.get_chunks_by_hadith_id(
-                        collection_name=collection_db_name,
-                        hadith_id=doc.hadith_id,
-                        language=doc.language or desired_language or "arabic",
-                    )
-                    
-                    if not all_chunks:
-                        # Fallback: keep original chunk
-                        reassembled_docs.append(doc)
-                        reassembled_hadith_ids.add(hadith_key)
-                        continue
-                    
-                    # Combine all chunk texts
-                    combined_text = "\n".join([chunk['text'] for chunk in all_chunks])
-                    
-                    # Create new Document with combined text
-                    reassembled_doc = Document(
-                        chunk_id=doc.chunk_id,  # Keep original chunk_id for reference
-                        text=combined_text,
-                        score=doc.score,
-                        search_type=doc.search_type,
-                        language=doc.language,
-                        collection=doc.collection,
-                        book_id=doc.book_id,
-                        chapter_id=doc.chapter_id,
-                        hadith_id=doc.hadith_id,
-                        narrator=doc.narrator,
-                        parent_hadith_id=doc.parent_hadith_id,
-                        book_number=doc.book_number,
-                        chapter_number=doc.chapter_number,
-                        hadith_id_in_book=doc.hadith_id_in_book,
-                        chunk_index=0,  # Now it's a complete document
-                        total_chunks=doc.total_chunks,
-                        is_chunked=False,  # No longer chunked - it's complete
-                    )
-                    reassembled_docs.append(reassembled_doc)
+                if not chunks:
+                    # Fallback: keep original chunk
+                    reassembled_docs.append(doc)
                     reassembled_hadith_ids.add(hadith_key)
-                    
-                    logger.debug(
-                        f"Reassembled Hadith #{doc.hadith_id}: "
-                        f"{len(all_chunks)} chunks -> {len(combined_text)} chars"
-                    )
-                    
-                except Exception as e:
-                    logger.warning(f"Failed to reassemble hadith {doc.hadith_id}: {e}")
-                    # Keep original chunk on error
-                    if hadith_key not in reassembled_hadith_ids:
-                        reassembled_docs.append(doc)
-                        reassembled_hadith_ids.add(hadith_key)
+                    continue
+                
+                # Combine all chunk texts
+                combined_text = "\n".join([chunk['text'] for chunk in chunks])
+                
+                # Create new Document with combined text
+                reassembled_doc = Document(
+                    chunk_id=doc.chunk_id,
+                    text=combined_text,
+                    score=doc.score,
+                    search_type=doc.search_type,
+                    language=doc.language,
+                    collection=doc.collection,
+                    book_id=doc.book_id,
+                    chapter_id=doc.chapter_id,
+                    hadith_id=doc.hadith_id,
+                    narrator=doc.narrator,
+                    parent_hadith_id=doc.parent_hadith_id,
+                    book_number=doc.book_number,
+                    chapter_number=doc.chapter_number,
+                    hadith_id_in_book=doc.hadith_id_in_book,
+                    chunk_index=0,
+                    total_chunks=doc.total_chunks,
+                    is_chunked=False,
+                )
+                reassembled_docs.append(reassembled_doc)
+                reassembled_hadith_ids.add(hadith_key)
+                
+                logger.debug(
+                    f"Reassembled Hadith #{doc.hadith_id}: "
+                    f"{len(chunks)} chunks -> {len(combined_text)} chars"
+                )
             
             logger.info(f"Reassembly complete: {len(documents)} -> {len(reassembled_docs)} documents")
             return reassembled_docs
@@ -210,6 +240,70 @@ class HadithRepository:
         except Exception as e:
             logger.error(f"Chunk reassembly failed: {e}")
             return documents  # Return original on failure
+    
+    def get_chunks_batch(
+        self,
+        collection_name: str,
+        hadith_ids: List[int],
+        language: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Batch fetch all chunks for multiple hadith IDs in a single query.
+        
+        Uses ChromaDB's $in operator for efficient batch retrieval.
+        
+        Args:
+            collection_name: Database collection name (e.g., "hadith_bukhari")
+            hadith_ids: List of hadith IDs to fetch chunks for
+            language: Optional language filter (arabic/english)
+            
+        Returns:
+            List of chunk dictionaries with 'id', 'metadata', 'text' keys
+        """
+        if not hadith_ids:
+            return []
+        
+        try:
+            collection = self.get_collection(collection_name)
+            
+            # Build where clause with $in for batch fetching
+            if language:
+                where_clause = {
+                    "$and": [
+                        {"hadith_id": {"$in": hadith_ids}},
+                        {"language": {"$eq": language}}
+                    ]
+                }
+            else:
+                where_clause = {"hadith_id": {"$in": hadith_ids}}
+            
+            result = collection.get(
+                where=where_clause,
+                include=['metadatas', 'documents']
+            )
+            
+            if not result['ids']:
+                return []
+            
+            # Convert to list of chunk dictionaries
+            chunks = []
+            for i, (chunk_id, metadata, text) in enumerate(zip(
+                result['ids'],
+                result['metadatas'],
+                result['documents']
+            )):
+                chunks.append({
+                    'id': chunk_id,
+                    'metadata': metadata,
+                    'text': text,
+                })
+            
+            logger.debug(f"Batch fetched {len(chunks)} chunks for {len(hadith_ids)} hadiths")
+            return chunks
+            
+        except Exception as e:
+            logger.error(f"Batch chunk fetch failed: {e}")
+            return []
     
     def get_chunks_by_hadith_id(
         self,

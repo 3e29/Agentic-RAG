@@ -199,33 +199,45 @@ def _autonomous_search(
     """
     Autonomous search using ReAct pattern.
     
-    The agent iteratively decides which tools to use based on:
-    - Query characteristics
-    - Current results
-    - Previous actions
+    Delegates orchestration to SearchOrchestrator while keeping the agent
+    decision logic in this module.
     
-    Sub-queries are processed IN PARALLEL for better performance.
+    The orchestrator handles:
+    - Parallel execution of agents for sub-queries
+    - Result aggregation and reranking
+    - Chunk reassembly
+    
+    This function provides:
+    - State extraction and validation
+    - Metadata collection
+    - The agent executor function
     """
     # Get sub-queries from state (if query was decomposed)
     sub_queries = state.get("sub_queries") or [query]
     target_collections = state.get("target_collections") or ["bukhari", "muslim"]
-    query_language = state.get("language", "ar")  # Get detected language
-    desired_output_language = state.get("desired_output_language")  # User's preferred result language
+    query_language = state.get("language", "ar")
+    desired_output_language = state.get("desired_output_language")
+    query_intent = state.get("query_intent", "thematic_search")
     
+    # Store metadata
     metadata["sub_queries"] = sub_queries
     metadata["target_collections"] = target_collections
     metadata["query_language"] = query_language
     metadata["desired_output_language"] = desired_output_language
-    
-    # Get query_intent for special handling of specific_lookup
-    query_intent = state.get("query_intent", "thematic_search")
     metadata["query_intent"] = query_intent
     
-    # Process sub-queries in PARALLEL using asyncio
-    logger.info(f"Processing {len(sub_queries)} sub-queries in parallel (lang={query_language}, output={desired_output_language}, intent={query_intent})")
+    logger.info(
+        f"Processing {len(sub_queries)} sub-queries via orchestrator "
+        f"(lang={query_language}, output={desired_output_language}, intent={query_intent})"
+    )
     
-    all_results = asyncio.run(
-        _execute_parallel_agents(
+    # Get the orchestrator and wire up the agent executor
+    orchestrator = get_search_orchestrator()
+    orchestrator.set_agent_executor(_execute_autonomous_agent_async)
+    
+    # Delegate to orchestrator for the full pipeline
+    results = asyncio.run(
+        orchestrator.orchestrate_search(
             sub_queries=sub_queries,
             target_collections=target_collections,
             query_language=query_language,
@@ -235,128 +247,7 @@ def _autonomous_search(
         )
     )
     
-    # Aggregate results PER sub-query first, then merge
-    # This ensures each sub-query contributes equally to the final results
-    # Flow: Each sub-query's 50 docs → Rerank against that sub-query → Top 5 → Merge all
-    num_sub_queries = len(sub_queries)
-    per_query_top_k = DEFAULT_TOP_K  # 5 results per sub-query
-    
-    logger.info(f"Aggregating results: {num_sub_queries} sub-queries × {per_query_top_k} results each")
-    
-    aggregation_stats = {
-        "per_query_results": [],
-        "total_unique": 0,
-        "duplicates_removed": 0,
-        "reranking_applied": False,
-    }
-    
-    merged_documents: List[Document] = []
-    
-    for i, (sub_query, docs) in enumerate(zip(sub_queries, all_results)):
-        if not docs:
-            logger.warning(f"Sub-query {i} returned no results: '{sub_query[:50]}...'")
-            aggregation_stats["per_query_results"].append({
-                "sub_query": sub_query[:100],
-                "raw_count": 0,
-                "after_rerank": 0,
-            })
-            continue
-        
-        # Aggregate this sub-query's results against its own query (not the original)
-        sub_aggregated = aggregate_results(
-            raw_results=[docs],  # Single list for this sub-query
-            original_query=sub_query,  # Rerank against THIS sub-query
-            top_k=per_query_top_k,
-            use_reranker=True,
-        )
-        
-        aggregation_stats["per_query_results"].append({
-            "sub_query": sub_query[:100],
-            "raw_count": len(docs),
-            "after_rerank": len(sub_aggregated.documents),
-        })
-        aggregation_stats["total_unique"] += sub_aggregated.total_unique
-        aggregation_stats["duplicates_removed"] += sub_aggregated.duplicates_removed
-        aggregation_stats["reranking_applied"] = aggregation_stats["reranking_applied"] or sub_aggregated.reranking_applied
-        
-        merged_documents.extend(sub_aggregated.documents)
-        logger.info(f"Sub-query {i}: {len(docs)} raw → {len(sub_aggregated.documents)} after rerank")
-    
-    # Final deduplication across all sub-queries (in case same hadith appeared in multiple)
-    seen_ids = set()
-    final_documents: List[Document] = []
-    for doc in merged_documents:
-        doc_key = doc.parent_hadith_id or doc.chunk_id
-        if doc_key not in seen_ids:
-            seen_ids.add(doc_key)
-            final_documents.append(doc)
-    
-    cross_query_duplicates = len(merged_documents) - len(final_documents)
-    aggregation_stats["cross_query_duplicates_removed"] = cross_query_duplicates
-    
-    logger.info(f"Final merge: {len(merged_documents)} → {len(final_documents)} (removed {cross_query_duplicates} cross-query duplicates)")
-    
-    metadata["aggregation"] = aggregation_stats
-    
-    # Reassemble chunked hadiths into their complete form
-    reassembled_docs = _reassemble_chunked_hadiths(
-        documents=final_documents,
-        desired_language=desired_output_language,
-    )
-    
-    metadata["reassembly"] = {
-        "input_count": len(final_documents),
-        "output_count": len(reassembled_docs),
-    }
-    
-    return reassembled_docs
-
-
-async def _execute_parallel_agents(
-    sub_queries: List[str],
-    target_collections: List[str],
-    query_language: str,
-    desired_output_language: Optional[str],
-    query_intent: str,
-    metadata: Dict[str, Any],
-) -> List[List[Document]]:
-    """
-    Execute autonomous agents for all sub-queries in parallel.
-    
-    Each sub-query gets its own ReAct agent that runs independently.
-    """
-    tasks = [
-        _execute_autonomous_agent_async(
-            query=sub_query,
-            target_collections=target_collections,
-            query_language=query_language,
-            desired_output_language=desired_output_language,
-            query_intent=query_intent,
-            query_index=i,
-        )
-        for i, sub_query in enumerate(sub_queries)
-    ]
-    
-    # Execute all agents in parallel
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Process results and handle exceptions
-    processed_results = []
-    all_iteration_logs = []
-    
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            logger.error(f"Agent for sub-query {i} failed: {result}")
-            processed_results.append([])
-        else:
-            docs, iteration_logs = result
-            processed_results.append(docs)
-            all_iteration_logs.extend(iteration_logs)
-    
-    # Store all iteration logs in metadata
-    metadata["agent_iterations"] = all_iteration_logs
-    
-    return processed_results
+    return results
 
 
 async def _execute_autonomous_agent_async(
