@@ -15,6 +15,10 @@ Production Standards:
 """
 
 from typing import Dict, Any
+from src.config.constants import (
+    format_proper_nouns_for_prompt,
+    format_noise_terms_for_prompt,
+)
 
 # =============================================================================
 # QUERY ANALYSIS PROMPTS
@@ -330,60 +334,61 @@ You have FULL CONTROL over which tools to use and in what order. Make your own d
 
 AVAILABLE TOOLS:
 1. expand_query - Generate synonyms/translations to improve recall
-   Input: {"query": "<text>"}
+   Input: {{"query": "<text>"}}
    Useful for: Terminology with multiple forms or translations
 
 2. extract_filters - Extract metadata filters from query
-   Input: {"query": "<text>"}
+   Input: {{"query": "<text>"}}
    Useful for: Queries mentioning specific collection, chapter, narrator, or hadith number
 
 3. find_chapter - Find chapter ID for a subject/topic
-   Input: {"subject": "<topic term>", "collection": "bukhari"|"muslim"|null}
+   Input: {{"subject": "<topic term>", "collection": "bukhari"|"muslim"|null}}
    Useful for: Focusing search on a specific Islamic topic's chapter
    Returns: chapter_id filter for more precise results
 
 4. keyword_search - BM25 lexical search
-   Input: {"query": "<text>"}
+   Input: {{"query": "<text>"}}
    Useful for: Narrator names, hadith numbers, book names, unique distinctive phrases
    Strength: Precise term matching, fast
 
 5. semantic_search - Vector similarity search
-   Input: {"query": "<text>"}
+   Input: {{"query": "<text>"}}
    Useful for: Conceptual queries, meanings, themes
    Strength: Finds related content even without exact term matches
    WARNING: Can be distracted by common descriptive words. Use with caution for proper nouns.
 
 6. hybrid_search - Combined keyword + semantic with RRF fusion
-   Input: {"query": "<text>"}
+   Input: {{"query": "<text>"}}
    Useful for: General queries, proper nouns, historical events, locations, balanced precision and recall
    Strength: Best of both approaches - prevents semantic distraction via keyword grounding
 
 7. relax_filters - Remove strict filters to broaden search
-   Input: {"level": 1|2|3}
+   Input: {{"level": 1|2|3}}
    Useful for: When previous search returned too few results
 
 8. finish - Return final results
-   Input: {"reason": "<why stopping>"}
+   Input: {{"reason": "<why stopping>"}}
    Use when: Sufficient results found OR search options exhausted
 
 CRITICAL DECISION RULES (Priority Order):
 
 1. PREFER HYBRID_SEARCH for:
-   - Proper nouns (Hudaybiyyah, Badr, Khaibar, Tabuk, أحد، بدر، الحديبية)
-   - Historical events (Treaty of..., غزوة، صلح، فتح)
-   - Specific locations (Mecca, Medina, مكة، المدينة)
-   - Person names (Abu Bakr, Aisha, أبو بكر، عائشة)
-   - Specific titles (Farewell Pilgrimage, حجة الوداع)
+   - Proper nouns (historical events, battles, locations, persons)
+   - Specific titles and treaties
    
-   WHY: Hybrid search combines keyword precision (finds "Hudaybiyyah") with semantic understanding
-   (understands context). This prevents "semantic distraction" where the model matches common
+   PROPER NOUNS REFERENCE:
+   {proper_nouns_list}
+   
+   WHY: Hybrid search combines keyword precision with semantic understanding.
+   This prevents "semantic distraction" where the model matches common
    words like "long", "hadith" instead of the critical historical term.
 
 2. QUERY CLEANING (Strip distracting descriptive terms BEFORE search):
-   - Remove length descriptors: "long", "short", "longest", "shortest" (طويل، قصير، أطول، أقصر)
-   - Remove generic words: "hadith", "narration", "story" (حديث، رواية، قصة)
-   - Extract CORE TERMS ONLY: "the long hadith of Hudaybiyyah" → "Hudaybiyyah"
    
+   NOISE TERMS TO REMOVE:
+   {noise_terms_list}
+   
+   Extract CORE TERMS ONLY:
    Examples:
    - "ما هو الحديث الطويل عن الحديبية" → Clean to: "الحديبية"
    - "the long hadith about the treaty of Hudaybiyyah" → Clean to: "Hudaybiyyah treaty"
@@ -399,7 +404,7 @@ QUERY REFINEMENT STRATEGIES:
 - "من هو راوي حديث [نص]": Search for "[نص]" ONLY.
 - "Hadith about [Topic]": Search for "[Topic]" ONLY.
 - Remove question words (Who, What, Where, ما, من, كيف, كم, أين) before search.
-- Strip length descriptors (long, short, longest, shortest, طويل, قصير, أطول, أقصر).
+- Strip noise terms (see NOISE TERMS list above).
 
 COMMON FAILURE PATTERNS TO AVOID:
 ❌ BAD: Using semantic_search for "long hadith of Hudaybiyyah" → Gets distracted by "long" and "hadith"
@@ -411,7 +416,7 @@ COMMON FAILURE PATTERNS TO AVOID:
 YOU DECIDE the best approach. There is no fixed order.
 
 OUTPUT FORMAT (JSON only):
-{"thought": "<your analysis and decision>", "action": "<tool_name>", "action_input": {...}}
+{{"thought": "<your analysis and decision>", "action": "<tool_name>", "action_input": {{...}}}}
 
 STOPPING CONDITIONS:
 - Found 5+ relevant results
@@ -572,7 +577,17 @@ def format_prompt(
     config = get_prompt(category, prompt_name)
     
     system_prompt = config["system"]
-    user_prompt = config["user_template"].format(**kwargs)
+    user_template = config["user_template"]
+    
+    # Dynamic injection for autonomous_agent prompt
+    if category == "retrieval" and prompt_name == "autonomous_agent":
+        system_prompt = system_prompt.format(
+            proper_nouns_list=format_proper_nouns_for_prompt(),
+            noise_terms_list=format_noise_terms_for_prompt()
+        )
+    
+    # Format user prompt with provided kwargs
+    user_prompt = user_template.format(**kwargs)
     temperature = config.get("temperature", 0.0)
     max_tokens = config.get("max_tokens", 256)
     

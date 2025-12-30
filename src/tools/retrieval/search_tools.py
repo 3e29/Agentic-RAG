@@ -62,6 +62,12 @@ from src.tools.retrieval.schemas import (
 )
 from src.utils.embedding_helper import ModalEmbeddings, get_embedder
 from src.utils.singletons import GlobalClients, get_chroma_client
+from src.config.constants import (
+    PROPER_NOUNS_ARABIC,
+    PROPER_NOUNS_ENGLISH,
+    DESCRIPTIVE_NOISE_ARABIC,
+    DESCRIPTIVE_NOISE_ENGLISH,
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -98,32 +104,6 @@ ENGLISH_STOPWORDS = {
 
 # No synonym dictionaries - avoiding overfitting
 # Using proper NLP techniques instead: normalization, stemming, prefix stripping
-
-# Historical events and proper nouns for keyword-heavy search
-PROPER_NOUNS_ARABIC = {
-    'الحديبية', 'حديبية', 'بدر', 'أحد', 'الخندق', 'خندق', 'خيبر', 'تبوك',
-    'مكة', 'المدينة', 'الطائف', 'حراء', 'ثور', 'عرفات', 'منى', 'مزدلفة',
-    'أبو بكر', 'عمر', 'عثمان', 'علي', 'عائشة', 'خديجة', 'فاطمة', 'الحسن', 'الحسين',
-    'حجة الوداع', 'الوداع', 'الإسراء', 'المعراج', 'الفتح', 'صلح', 'معاهدة', 'غزوة',
-}
-
-PROPER_NOUNS_ENGLISH = {
-    'hudaybiyyah', 'hudaybiyya', 'badr', 'uhud', 'khandaq', 'trench', 'khaybar', 'tabuk',
-    'mecca', 'makkah', 'medina', 'madinah', 'taif', 'hira', 'thawr', 'arafat', 'mina', 'muzdalifah',
-    'abu bakr', 'umar', 'uthman', 'ali', 'aisha', 'khadija', 'fatima', 'hasan', 'husayn',
-    'farewell pilgrimage', 'isra', 'miraj', 'conquest', 'treaty', 'battle', 'expedition',
-}
-
-# Descriptive terms to strip from queries (cause semantic distraction)
-DESCRIPTIVE_NOISE_ARABIC = {
-    'طويل', 'طويلة', 'أطول', 'قصير', 'قصيرة', 'أقصر',
-    'حديث', 'رواية', 'قصة', 'نص',
-}
-
-DESCRIPTIVE_NOISE_ENGLISH = {
-    'long', 'longest', 'short', 'shortest',
-    'hadith', 'narration', 'story', 'text', 'passage',
-}
 
 
 def contains_proper_noun(text: str) -> bool:

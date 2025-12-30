@@ -15,12 +15,14 @@ The Retrieval Agent was choosing `semantic_search` instead of `hybrid_search` fo
 ### 1. Agent Prompt Rewrite (`src/utils/prompts.py`)
 
 **Changes:**
+
 - Added explicit "CRITICAL DECISION RULES" section prioritizing hybrid_search for proper nouns
 - Added "QUERY CLEANING" instructions to strip descriptive terms before search
 - Added "COMMON FAILURE PATTERNS TO AVOID" with concrete examples
 - Updated tool descriptions with warnings about semantic distraction
 
 **Key additions:**
+
 ```
 CRITICAL DECISION RULES (Priority Order):
 1. Proper nouns, names, historical events → ALWAYS use hybrid_search
@@ -37,20 +39,24 @@ Before calling search tools, mentally strip:
 **New Functions:**
 
 #### `clean_query_for_search(text: str) -> str` (Lines 150-188)
+
 - Strips DESCRIPTIVE_NOISE_ARABIC and DESCRIPTIVE_NOISE_ENGLISH terms
 - Handles Arabic "ال" prefix (e.g., "الطويل" → "طويل" → removed)
 - Preserves core query intent while removing semantic distractors
 
 **Noise Terms:**
+
 - English: `long, longest, short, shortest, hadith, narration, story, text, passage`
 - Arabic: `طويل, طويلة, أطول, قصير, قصيرة, أقصر, حديث, رواية, قصة, نص`
 
 #### `contains_proper_noun(text: str) -> bool` (Lines 127-148)
+
 - Detects proper nouns from curated sets (66 Arabic + 35 English terms)
 - Identifies: historical events, locations, persons, companions
 - Examples: `Hudaybiyyah, Battle of Badr, Abu Bakr, الحديبية, غزوة بدر`
 
 #### `calculate_alpha_for_query(text: str) -> float` (Lines 191-223)
+
 - **Proper noun detected** → α=0.35 (keyword-heavy, prevents distraction)
 - **Long query (≥5 words)** → α=0.4 (keyword-balanced)
 - **Short query (≤2 words)** → α=0.6 (semantic-heavy)
@@ -59,12 +65,15 @@ Before calling search tools, mentally strip:
 ### 3. Integration into Search Functions
 
 **Updated Functions:**
+
 1. `hybrid_search()` (Lines 1205-1260)
+
    - Calls `clean_query_for_search()` at start
    - Uses `calculate_alpha_for_query()` for dynamic weighting
    - Passes cleaned_query to BM25 and vector search
 
 2. `crosslingual_hybrid_search()` async (Lines 1455-1650)
+
    - Cleans query before keyword extraction
    - Translates cleaned query (not raw query)
    - Uses cleaned_query in all BM25, vector, and translation calls
@@ -76,14 +85,17 @@ Before calling search tools, mentally strip:
 ## Performance Impact
 
 ### Query Cleaning Overhead
+
 - **Cost**: Minimal - simple string operations (split, strip, filter)
 - **Benefit**: Prevents expensive re-queries when agent gets distracted
 
 ### Dynamic Alpha Calculation
+
 - **Cost**: Negligible - 3 dictionary lookups + word count
 - **Benefit**: Optimal semantic/keyword balance per query type
 
 ### Overall Impact
+
 - **Latency**: +0.1ms (query preprocessing)
 - **Accuracy**: Significant improvement for proper noun queries
 - **Cache**: Works seamlessly with existing LRU cache (cleaned query becomes cache key)
@@ -102,12 +114,14 @@ All tests in `tests/test_query_cleaning.py` pass:
 ```
 
 ### Example: "the long hadith of Hudaybiyyah"
+
 1. **Cleaned**: "the of Hudaybiyyah" (removed "long", "hadith")
 2. **Proper noun detected**: ✅ True (Hudaybiyyah in PROPER_NOUNS_ENGLISH)
 3. **Alpha**: 0.35 (keyword-heavy)
 4. **Result**: hybrid_search finds actual Hudaybiyyah treaty text, not narrator snippets
 
 ### Example: "الحديث الطويل عن الحديبية"
+
 1. **Cleaned**: "عن الحديبية" (removed "الحديث", "الطويل")
 2. **Proper noun detected**: ✅ True (الحديبية in PROPER_NOUNS_ARABIC)
 3. **Alpha**: 0.35 (keyword-heavy)
@@ -116,12 +130,14 @@ All tests in `tests/test_query_cleaning.py` pass:
 ## Files Modified
 
 1. **`src/tools/retrieval/search_tools.py`** (2179 lines)
+
    - Added proper noun detection sets (Lines 89-111)
    - Added noise term sets (Lines 113-123)
    - Added helper functions (Lines 127-223)
    - Updated search functions (Lines 1205-1820)
 
 2. **`src/utils/prompts.py`** (561 lines)
+
    - Rewrote autonomous_agent prompt (Lines 327-450)
 
 3. **`tests/test_query_cleaning.py`** (NEW, 199 lines)
@@ -145,6 +161,7 @@ All tests in `tests/test_query_cleaning.py` pass:
 ## Expected Outcomes
 
 ### Before Phase 3:
+
 ```
 Query: "the long hadith of Hudaybiyyah"
 Agent: Uses semantic_search (WRONG TOOL)
@@ -153,6 +170,7 @@ Results: ❌ Short narrator chain snippets
 ```
 
 ### After Phase 3:
+
 ```
 Query: "the long hadith of Hudaybiyyah"
 Cleaned: "Hudaybiyyah" (noise removed)
@@ -181,6 +199,7 @@ Results: ✅ Actual Hudaybiyyah treaty hadiths
 ## Summary
 
 Phase 3 solves the **Semantic Distraction Problem** through a coordinated 3-part fix:
+
 1. **Explicit agent instructions** (prefer hybrid_search for proper nouns)
 2. **Query cleaning** (strip distracting descriptive terms)
 3. **Dynamic alpha** (keyword-heavy weighting for proper nouns)
