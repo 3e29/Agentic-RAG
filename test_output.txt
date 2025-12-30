@@ -1,0 +1,177 @@
+﻿C:/Users/alaaz/OneDrive/Desktop/Uni1/Project/UNIproject/venv/Scripts/python.exe : 
+INFO:src.tools.retrieval.search_tools:Cross-lingual hybrid search: '┘à╪º ╪¼╪▓╪º╪í 
+╪º┘ä╪╡╪º╪¿╪▒┘è┘å╪ƒ...' (arabic=True, k=10)
+At line:1 char:76
++ ... NIproject"; C:/Users/alaaz/OneDrive/Desktop/Uni1/Project/UNIproject/v ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (INFO:src.tools....bic=True, k=10):String) [], RemoteExc 
+   eption
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+INFO:src.utils.embedding_helper:Initialized Modal embeddings client: 
+https://alaapocket3--bge-m3-embeddings-embed.modal.run
+INFO:src.tools.retrieval.search_tools:BM25 Arabic keywords: ['╪¼╪▓╪º', '╪╡╪º╪¿╪▒┘è┘å╪ƒ', 
+'╪º┘ä╪╡╪º╪¿╪▒┘è┘å╪ƒ', '╪¼╪▓╪º╪í']
+INFO:src.tools.retrieval.search_tools:BM25 index built with 33578 documents
+INFO:src.tools.retrieval.search_tools:BM25 indexed search: 5 tokens, 30 results (language=arabic)
+INFO:src.tools.retrieval.search_tools:BM25 Arabic found 30 matches
+INFO:src.utils.llm_helper:Calling LLM with prompt length: 194
+INFO:httpx:HTTP Request: POST 
+https://alaapocket3--qwen2-5-14b-instruct-qwenendpoint-generate.modal.run "HTTP/1.1 200 OK"
+INFO:src.utils.llm_helper:LLM response received (length: 39)
+INFO:src.utils.llm_helper:Token usage - prompt: 76, completion: 9, total: 85
+INFO:src.tools.retrieval.search_tools:Query translation: '┘à╪º ╪¼╪▓╪º╪í ╪º┘ä╪╡╪º╪¿╪▒┘è┘å╪ƒ...' -> 
+'What is the reward of the patient ones?...'
+INFO:src.tools.retrieval.search_tools:English translation: 'What is the reward of the patient 
+ones?...'
+INFO:src.utils.embedding_helper:Generating BGE-M3 embeddings for 1 texts
+INFO:httpx:HTTP Request: POST https://alaapocket3--bge-m3-embeddings-embed.modal.run "HTTP/1.1 200 
+OK"
+INFO:src.utils.embedding_helper:Generated 1 embeddings (dim=1024)
+INFO:src.utils.singletons:Creating ChromaDB client at: ./data/chroma_db_bge_m3
+INFO:src.tools.retrieval.search_tools:ChromaDB collection 'hadith_bukhari' loaded with 17018 
+documents
+INFO:src.tools.retrieval.search_tools:ChromaDB collection 'hadith_muslim' loaded with 16560 documents
+INFO:src.tools.retrieval.search_tools:Vector (English) found 60 results
+INFO:src.utils.embedding_helper:Generating BGE-M3 embeddings for 1 texts
+INFO:httpx:HTTP Request: POST https://alaapocket3--bge-m3-embeddings-embed.modal.run "HTTP/1.1 200 
+OK"
+INFO:src.utils.embedding_helper:Generated 1 embeddings (dim=1024)
+INFO:src.tools.retrieval.search_tools:Vector (Arabic) found 60 results
+INFO:src.tools.retrieval.search_tools:Cross-lingual hybrid search found 10 documents in 98014.1ms
+INFO:src.tools.retrieval.search_tools:Cross-lingual hybrid search: '┘â┘è┘ü ┘â╪º┘å ╪º┘ä┘å╪¿┘è 
+┘è╪╡┘ä┘è╪ƒ...' (arabic=True, k=10)
+INFO:src.tools.retrieval.search_tools:BM25 Arabic keywords: ['╪º┘ä┘è┘ü', '┘è┘ü', '┘è╪╡┘ä┘è╪ƒ', 
+'┘â┘è┘ü']
+INFO:src.tools.retrieval.search_tools:BM25 indexed search: 5 tokens, 30 results (language=arabic)
+INFO:src.tools.retrieval.search_tools:BM25 Arabic found 30 matches
+INFO:src.utils.llm_helper:Calling LLM with prompt length: 196
+INFO:httpx:HTTP Request: POST 
+https://alaapocket3--qwen2-5-14b-instruct-qwenendpoint-generate.modal.run "HTTP/1.1 200 OK"
+INFO:src.utils.llm_helper:LLM response received (length: 25)
+INFO:src.utils.llm_helper:Token usage - prompt: 75, completion: 6, total: 81
+INFO:src.tools.retrieval.search_tools:Query translation: '┘â┘è┘ü ┘â╪º┘å ╪º┘ä┘å╪¿┘è ┘è╪╡┘ä┘è╪ƒ...' -> 
+'How did the Prophet pray?...'
+INFO:src.tools.retrieval.search_tools:English translation: 'How did the Prophet pray?...'
+INFO:src.utils.embedding_helper:Generating BGE-M3 embeddings for 1 texts
+INFO:httpx:HTTP Request: POST https://alaapocket3--bge-m3-embeddings-embed.modal.run "HTTP/1.1 200 
+OK"
+INFO:src.utils.embedding_helper:Generated 1 embeddings (dim=1024)
+INFO:src.tools.retrieval.search_tools:Vector (English) found 60 results
+INFO:src.utils.embedding_helper:Generating BGE-M3 embeddings for 1 texts
+INFO:httpx:HTTP Request: POST https://alaapocket3--bge-m3-embeddings-embed.modal.run "HTTP/1.1 200 
+OK"
+INFO:src.utils.embedding_helper:Generated 1 embeddings (dim=1024)
+INFO:src.tools.retrieval.search_tools:Vector (Arabic) found 60 results
+INFO:src.tools.retrieval.search_tools:Cross-lingual hybrid search found 10 documents in 5773.9ms
+INFO:src.tools.retrieval.search_tools:Cross-lingual hybrid search: 'What are the rules of giving 
+charity?...' (arabic=False, k=10)
+INFO:src.tools.retrieval.search_tools:BM25 English keywords: ['rules', 'giving', 'charity']
+INFO:src.tools.retrieval.search_tools:BM25 indexed search: 3 tokens, 30 results (language=english)
+INFO:src.tools.retrieval.search_tools:BM25 English found 30 matches
+INFO:src.utils.embedding_helper:Generating BGE-M3 embeddings for 1 texts
+INFO:httpx:HTTP Request: POST https://alaapocket3--bge-m3-embeddings-embed.modal.run "HTTP/1.1 200 
+OK"
+INFO:src.utils.embedding_helper:Generated 1 embeddings (dim=1024)
+INFO:src.tools.retrieval.search_tools:Vector (Arabic) found 60 results
+INFO:src.tools.retrieval.search_tools:Cross-lingual hybrid search found 10 documents in 1707.1ms
+INFO:src.tools.retrieval.search_tools:Cross-lingual hybrid search: 'What is the virtue of 
+fasting?...' (arabic=False, k=10)
+INFO:src.tools.retrieval.search_tools:BM25 English keywords: ['virtue', 'fasting']
+INFO:src.tools.retrieval.search_tools:BM25 indexed search: 2 tokens, 30 results (language=english)
+INFO:src.tools.retrieval.search_tools:BM25 English found 30 matches
+INFO:src.utils.embedding_helper:Generating BGE-M3 embeddings for 1 texts
+INFO:httpx:HTTP Request: POST https://alaapocket3--bge-m3-embeddings-embed.modal.run "HTTP/1.1 200 
+OK"
+INFO:src.utils.embedding_helper:Generated 1 embeddings (dim=1024)
+INFO:src.tools.retrieval.search_tools:Vector (Arabic) found 60 results
+INFO:src.tools.retrieval.search_tools:Cross-lingual hybrid search found 10 documents in 1464.6ms
+INFO:src.tools.retrieval.search_tools:Cross-lingual hybrid search: '╪º┘ä╪╡╪¿╪▒...' (arabic=True, 
+k=10)
+INFO:src.tools.retrieval.search_tools:BM25 Arabic keywords: ['╪╡╪¿╪▒', '╪º┘ä╪╡╪¿╪▒']
+INFO:src.tools.retrieval.search_tools:BM25 indexed search: 3 tokens, 30 results (language=arabic)
+INFO:src.tools.retrieval.search_tools:BM25 Arabic found 30 matches
+INFO:src.utils.llm_helper:Calling LLM with prompt length: 182
+INFO:httpx:HTTP Request: POST 
+https://alaapocket3--qwen2-5-14b-instruct-qwenendpoint-generate.modal.run "HTTP/1.1 200 OK"
+INFO:src.utils.llm_helper:LLM response received (length: 8)
+INFO:src.utils.llm_helper:Token usage - prompt: 70, completion: 2, total: 72
+INFO:src.tools.retrieval.search_tools:Query translation: '╪º┘ä╪╡╪¿╪▒...' -> 'patience...'
+INFO:src.tools.retrieval.search_tools:English translation: 'patience...'
+INFO:src.utils.embedding_helper:Generating BGE-M3 embeddings for 1 texts
+INFO:httpx:HTTP Request: POST https://alaapocket3--bge-m3-embeddings-embed.modal.run "HTTP/1.1 200 
+OK"
+INFO:src.utils.embedding_helper:Generated 1 embeddings (dim=1024)
+WARNING:src.tools.retrieval.search_tools:Vector search on hadith_bukhari failed: Expected where to 
+have exactly one operator, got {'language': 'english', 'collection': {'$eq': 'Sahih al-Bukhari'}} in 
+query.
+INFO:src.tools.retrieval.search_tools:Vector (English) found 0 results
+INFO:src.utils.embedding_helper:Generating BGE-M3 embeddings for 1 texts
+INFO:httpx:HTTP Request: POST https://alaapocket3--bge-m3-embeddings-embed.modal.run "HTTP/1.1 200 
+OK"
+INFO:src.utils.embedding_helper:Generated 1 embeddings (dim=1024)
+WARNING:src.tools.retrieval.search_tools:Vector search on hadith_bukhari failed: Expected where to 
+have exactly one operator, got {'language': 'arabic', 'collection': {'$eq': 'Sahih al-Bukhari'}} in 
+query.
+INFO:src.tools.retrieval.search_tools:Vector (Arabic) found 0 results
+INFO:src.tools.retrieval.search_tools:Cross-lingual hybrid search found 6 documents in 4919.1ms
+================================================================================
+CROSS-LINGUAL HYBRID SEARCH INTEGRATION TEST
+================================================================================
+
+Testing optimized BM25 within full hybrid search pipeline...
+
+Arabic: Patience:
+  Query: ┘à╪º ╪¼╪▓╪º╪í ╪º┘ä╪╡╪º╪¿╪▒┘è┘å╪ƒ
+  Results: 10 documents
+  Time: 98014.1ms
+  Top Result: ┘ê╪¡╪»┘æ╪½┘å╪º ╪Ñ╪│╪¡╪º┘é ╪¿┘å ╪Ñ╪¿╪▒╪º┘ç┘è┘à╪î ╪ú╪«╪¿╪▒┘å╪º ┘à╪¡┘à┘æ╪» ╪¿┘å ╪¿┘â╪▒╪î ╪¡╪»┘æ╪½┘å╪º ╪│╪╣┘è╪» ╪¿┘å ╪ú╪¿┘è ╪╣╪▒┘ê╪¿╪⌐╪î ╪¡ ┘ê╪¡╪»┘æ╪½┘å╪º ╪ú╪¿┘ê ╪¿┘â╪▒ ╪¿┘å ╪ú╪¿┘è ╪┤┘è...
+  Score: 0.0164
+  Γ£ô PASS
+
+Arabic: Prayer:
+  Query: ┘â┘è┘ü ┘â╪º┘å ╪º┘ä┘å╪¿┘è ┘è╪╡┘ä┘è╪ƒ
+  Results: 10 documents
+  Time: 5773.9ms
+  Top Result: . ┘é╪º┘ä ┘â┘à ╪¿┘é┘è ┘é╪º┘ä ╪ú╪▒╪¿╪╣╪⌐ ╪ú╪│┘ç┘à ┘ê┘å╪╡┘ü. ┘é╪º┘ä ╪º┘ä┘à┘å╪░╪▒ ╪¿┘å ╪º┘ä╪▓┘æ╪¿┘è╪▒ ┘é╪» ╪ú╪«╪░╪¬ ╪│┘ç┘à╪º ╪¿┘à╪º╪ª╪⌐ ╪ú┘ä┘ü. ┘é╪º┘ä ╪╣┘à╪▒┘ê ╪¿┘å ╪╣╪½┘à╪º┘å ┘é╪»...
+  Score: 0.0164
+  Γ£ô PASS
+
+English: Charity:
+  Query: What are the rules of giving charity?
+  Results: 10 documents
+  Time: 1707.1ms
+  Top Result: A man asked the Prophet, "O Allah's Messenger (∩╖║)! What kind of charity is the best?" He replied. "T...
+  Score: 0.0323
+  Γ£ô PASS
+
+English: Fasting:
+  Query: What is the virtue of fasting?
+  Results: 10 documents
+  Time: 1464.6ms
+  Top Result: Allah's Messenger (∩╖║) said, "Allah said, 'All the deeds of Adam's sons (people) are for them, except...
+  Score: 0.0292
+  Γ£ô PASS
+
+================================================================================
+Γ£ô ALL INTEGRATION TESTS PASSED!
+================================================================================
+
+Optimized BM25 successfully integrated with:
+  Γ£ô Cross-lingual search strategy
+  Γ£ô Semantic vector search
+  Γ£ô Reciprocal Rank Fusion
+  Γ£ô Language filtering
+  Γ£ô Full corpus coverage (33K+ docs)
+
+================================================================================
+TESTING WITH METADATA FILTERS
+================================================================================
+
+Query: ╪º┘ä╪╡╪¿╪▒
+Filter: collection=sahih_al-bukhari
+Results: 6 documents
+Time: 4919.1ms
+Γ£ô All results correctly filtered to Bukhari collection
+
+================================================================================
