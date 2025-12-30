@@ -66,6 +66,15 @@ from src.tools.retrieval.user_content_tools import (
     UserHadithProcessorTool,
     process_user_hadith,
 )
+from src.data.hadith_repository import (
+    HadithRepository,
+    get_hadith_repository,
+    reassemble_chunked_hadiths,
+)
+from src.agents.search_orchestrator import (
+    SearchOrchestrator,
+    get_search_orchestrator,
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -78,140 +87,30 @@ PARALLEL_SEARCH_K = 50  # Fetch 50 hadiths per search for better cross-encoder r
 
 
 # ============================================================================
-# Chunk Reassembly Helper
+# Chunk Reassembly Helper (Delegated to HadithRepository)
 # ============================================================================
 
 def _reassemble_chunked_hadiths(
     documents: List[Document],
     desired_language: Optional[str] = None,
+    repository: Optional[HadithRepository] = None,
 ) -> List[Document]:
     """
     Reassemble chunked hadiths into their complete form.
     
-    When a hadith is too long and was split into multiple chunks during embedding,
-    this function fetches all chunks and combines them into the full hadith text.
+    This function delegates to HadithRepository for the actual reassembly.
+    Kept for backward compatibility with existing code.
     
     Args:
         documents: List of Document objects from search results
         desired_language: Language preference for fetching chunks (arabic/english)
+        repository: Optional HadithRepository instance (uses singleton if not provided)
         
     Returns:
         List of Document objects with chunked hadiths reassembled
     """
-    from src.utils.singletons import get_chroma_client
-    
-    if not documents:
-        return documents
-    
-    # Identify documents that need reassembly (total_chunks > 1 and we only have 1 chunk)
-    reassembly_needed = []
-    for doc in documents:
-        if doc.total_chunks and doc.total_chunks > 1:
-            reassembly_needed.append(doc)
-    
-    if not reassembly_needed:
-        return documents
-    
-    logger.info(f"Reassembling {len(reassembly_needed)} chunked hadiths")
-    
-    try:
-        client = get_chroma_client()
-        reassembled_docs = []
-        reassembled_hadith_ids = set()  # Track which hadiths we've already reassembled
-        
-        for doc in documents:
-            # Skip if already reassembled this hadith
-            hadith_key = (doc.hadith_id, doc.language, doc.collection)
-            if hadith_key in reassembled_hadith_ids:
-                continue
-            
-            # If not chunked, keep as-is
-            if not doc.total_chunks or doc.total_chunks <= 1:
-                reassembled_docs.append(doc)
-                reassembled_hadith_ids.add(hadith_key)
-                continue
-            
-            # Need to fetch all chunks for this hadith
-            # Normalize collection name to database format
-            coll_name = doc.collection.lower() if doc.collection else "bukhari"
-            if "bukhari" in coll_name:
-                coll_name = "bukhari"
-            elif "muslim" in coll_name:
-                coll_name = "muslim"
-            collection_db_name = f"hadith_{coll_name}"
-            
-            try:
-                collection = client.get_collection(collection_db_name)
-                
-                # Build query filter
-                lang_filter = doc.language or desired_language or "arabic"
-                all_chunks = collection.get(
-                    where={
-                        "$and": [
-                            {"hadith_id": {"$eq": doc.hadith_id}},
-                            {"language": {"$eq": lang_filter}}
-                        ]
-                    },
-                    include=['metadatas', 'documents']
-                )
-                
-                if not all_chunks['ids']:
-                    # Fallback: keep original chunk
-                    reassembled_docs.append(doc)
-                    reassembled_hadith_ids.add(hadith_key)
-                    continue
-                
-                # Sort chunks by chunk_index
-                chunk_data = list(zip(
-                    all_chunks['ids'],
-                    all_chunks['metadatas'],
-                    all_chunks['documents']
-                ))
-                chunk_data.sort(key=lambda x: x[1].get('chunk_index', 0))
-                
-                # Combine all chunk texts
-                combined_text = "\n".join([text for _, _, text in chunk_data])
-                
-                # Create new Document with combined text
-                reassembled_doc = Document(
-                    chunk_id=doc.chunk_id,  # Keep original chunk_id for reference
-                    text=combined_text,
-                    score=doc.score,
-                    search_type=doc.search_type,
-                    language=doc.language,
-                    collection=doc.collection,
-                    book_id=doc.book_id,
-                    chapter_id=doc.chapter_id,
-                    hadith_id=doc.hadith_id,
-                    narrator=doc.narrator,
-                    parent_hadith_id=doc.parent_hadith_id,
-                    book_number=doc.book_number,
-                    chapter_number=doc.chapter_number,
-                    hadith_id_in_book=doc.hadith_id_in_book,
-                    chunk_index=0,  # Now it's a complete document
-                    total_chunks=doc.total_chunks,
-                    is_chunked=False,  # No longer chunked - it's complete
-                )
-                reassembled_docs.append(reassembled_doc)
-                reassembled_hadith_ids.add(hadith_key)
-                
-                logger.debug(
-                    f"Reassembled Hadith #{doc.hadith_id}: {len(chunk_data)} chunks -> {len(combined_text)} chars"
-                )
-                
-            except Exception as e:
-                logger.warning(f"Failed to reassemble hadith {doc.hadith_id}: {e}")
-                # Keep original chunk on error
-                if hadith_key not in reassembled_hadith_ids:
-                    reassembled_docs.append(doc)
-                    reassembled_hadith_ids.add(hadith_key)
-        
-        logger.info(f"Reassembly complete: {len(documents)} -> {len(reassembled_docs)} documents")
-        return reassembled_docs
-        
-    except Exception as e:
-        logger.error(f"Chunk reassembly failed: {e}")
-        return documents  # Return original on failure
+    repo = repository or get_hadith_repository()
+    return repo.reassemble_chunked_hadiths(documents, desired_language)
 
 
 # ============================================================================
@@ -1109,21 +1008,19 @@ def _handle_metadata_query(
     query: str,
     state: AgentState,
     metadata: Dict[str, Any],
+    repository: Optional[HadithRepository] = None,
 ) -> List[Document]:
     """
     Handle metadata-based queries (longest, shortest, most, count, etc.)
     
     These queries require direct database lookups rather than semantic search.
-    Uses the total_chunks metadata field to determine hadith length:
-    - More chunks = longer hadith (each chunk is ~800 chars)
+    Uses the HadithRepository for data access.
     
     Supported query types:
     - "longest hadith" -> find hadith with max total_chunks
     - "shortest hadith" -> find hadith with min total_chunks (=1)
     - "how many hadiths" -> count query (future)
     """
-    from src.utils.singletons import get_chroma_client
-    
     logger.info("Handling metadata query")
     metadata["stages"].append("metadata_query")
     
@@ -1142,142 +1039,37 @@ def _handle_metadata_query(
         metadata["stages"].append("metadata_fallback_to_search")
         return _autonomous_search(query, state, metadata)
     
+    # Use the repository for data access
+    repo = repository or get_hadith_repository()
+    
     try:
-        client = get_chroma_client()
         results = []
         
         for coll_name in target_collections:
-            collection_db_name = f"hadith_{coll_name}"
-            try:
-                collection = client.get_collection(collection_db_name)
-            except Exception as e:
-                logger.warning(f"Collection {collection_db_name} not found: {e}")
-                continue
-            
-            # Get all documents with metadata to find longest/shortest
-            all_docs = collection.get(include=['metadatas', 'documents'])
-            
-            if not all_docs['ids']:
-                continue
-            
-            # Build hadith -> chunks mapping with text length tracking
-            hadith_chunks = {}  # hadith_id -> data dict
-            for i, (doc_id, meta, text) in enumerate(zip(
-                all_docs['ids'], 
-                all_docs['metadatas'], 
-                all_docs['documents']
-            )):
-                hadith_id = meta.get('hadith_id')
-                total_chunks = meta.get('total_chunks', 1)
-                lang = meta.get('language', 'arabic')
-                
-                # Filter by desired language if specified
-                if desired_language:
-                    if desired_language == 'arabic' and lang != 'arabic':
-                        continue
-                    if desired_language == 'english' and lang != 'english':
-                        continue
-                
-                # Track chunks per hadith
-                if hadith_id not in hadith_chunks:
-                    hadith_chunks[hadith_id] = {
-                        'total_chunks': total_chunks,
-                        'doc_ids': [doc_id],
-                        'metadatas': [meta],
-                        'texts': [text],
-                        'total_text_length': len(text),  # Track actual text length
-                    }
-                else:
-                    # Add chunk to existing hadith
-                    hadith_chunks[hadith_id]['doc_ids'].append(doc_id)
-                    hadith_chunks[hadith_id]['metadatas'].append(meta)
-                    hadith_chunks[hadith_id]['texts'].append(text)
-                    hadith_chunks[hadith_id]['total_text_length'] += len(text)
-                    # Update total_chunks if this chunk has higher value
-                    if total_chunks > hadith_chunks[hadith_id]['total_chunks']:
-                        hadith_chunks[hadith_id]['total_chunks'] = total_chunks
-            
-            if not hadith_chunks:
-                continue
-            
-            # Sort hadiths based on query type
-            if is_shortest:
-                # For shortest: sort by actual text length (ascending)
-                sorted_hadiths = sorted(
-                    hadith_chunks.items(),
-                    key=lambda x: x[1]['total_text_length'],
-                    reverse=False  # Ascending - shortest first
+            if is_longest:
+                doc = repo.get_longest_hadith(
+                    collection=coll_name,
+                    language=desired_language,
                 )
             else:
-                # For longest: sort by total_chunks (descending) then by text length
-                sorted_hadiths = sorted(
-                    hadith_chunks.items(),
-                    key=lambda x: (x[1]['total_chunks'], x[1]['total_text_length']),
-                    reverse=True  # Descending - longest first
+                doc = repo.get_shortest_hadith(
+                    collection=coll_name,
+                    language=desired_language,
                 )
             
-            # Get top result
-            if sorted_hadiths:
-                top_hadith_id, top_data = sorted_hadiths[0]
-                
-                # For metadata queries, we need ALL chunks to reconstruct the full hadith
-                # Query ChromaDB again to get all chunks for this specific hadith
-                all_hadith_chunks = collection.get(
-                    where={
-                        "$and": [
-                            {"hadith_id": {"$eq": top_hadith_id}},
-                            {"language": {"$eq": desired_language if desired_language else "arabic"}}
-                        ]
-                    },
-                    include=['metadatas', 'documents']
-                )
-                
-                # Sort chunks by chunk_index to reconstruct in order
-                chunk_data = list(zip(
-                    all_hadith_chunks['ids'],
-                    all_hadith_chunks['metadatas'],
-                    all_hadith_chunks['documents']
-                ))
-                chunk_data.sort(key=lambda x: x[1].get('chunk_index', 0))
-                
-                # Combine all chunk texts into one
-                combined_text = "\n".join([text for _, _, text in chunk_data])
-                
-                # Use metadata from first chunk
-                first_meta = chunk_data[0][1] if chunk_data else top_data['metadatas'][0]
-                first_doc_id = chunk_data[0][0] if chunk_data else top_data['doc_ids'][0]
-                
-                doc = Document(
-                    chunk_id=first_doc_id,
-                    text=combined_text,  # Full combined text from all chunks
-                    score=1.0,  # Top result
-                    search_type="metadata_query",
-                    language=first_meta.get('language', 'arabic'),
-                    collection=first_meta.get('collection', ''),
-                    book_id=first_meta.get('book_id'),
-                    chapter_id=first_meta.get('chapter_id'),
-                    hadith_id=first_meta.get('hadith_id'),
-                    narrator=first_meta.get('narrator'),
-                    parent_hadith_id=first_meta.get('parent_hadith_id'),
-                    book_number=first_meta.get('book_number'),
-                    chapter_number=first_meta.get('chapter_number'),
-                    hadith_id_in_book=first_meta.get('hadith_id_in_book'),
-                    chunk_index=0,  # Combined document
-                    total_chunks=first_meta.get('total_chunks', 1),
-                    is_chunked=first_meta.get('is_chunked', False),
-                )
+            if doc:
                 results.append(doc)
                 
                 metadata["metadata_query_result"] = {
                     "query_type": "longest" if is_longest else "shortest",
-                    "hadith_id": top_hadith_id,
-                    "total_chunks": top_data['total_chunks'],
+                    "hadith_id": doc.hadith_id,
+                    "total_chunks": doc.total_chunks,
                     "collection": coll_name,
                 }
                 
                 logger.info(
-                    f"Metadata query found: Hadith #{top_hadith_id} with "
-                    f"{top_data['total_chunks']} chunks ({coll_name})"
+                    f"Metadata query found: Hadith #{doc.hadith_id} with "
+                    f"{doc.total_chunks} chunks ({coll_name})"
                 )
         
         return results
