@@ -209,16 +209,32 @@ def _autonomous_search(
     orchestrator.set_agent_executor(_execute_autonomous_agent_async)
     
     # Delegate to orchestrator for the full pipeline
-    results = asyncio.run(
-        orchestrator.orchestrate_search(
-            sub_queries=sub_queries,
-            target_collections=target_collections,
-            query_language=query_language,
-            desired_output_language=desired_output_language,
-            query_intent=query_intent,
-            metadata=metadata,
-        )
+    # Handle both sync and async contexts safely
+    coro = orchestrator.orchestrate_search(
+        sub_queries=sub_queries,
+        target_collections=target_collections,
+        query_language=query_language,
+        desired_output_language=desired_output_language,
+        query_intent=query_intent,
+        metadata=metadata,
     )
+    
+    try:
+        # Check if we're already in an async context
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop - safe to use asyncio.run()
+        loop = None
+    
+    if loop is not None:
+        # Already in async context - use nest_asyncio or run in thread
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, coro)
+            results = future.result()
+    else:
+        # No async context - use asyncio.run() directly
+        results = asyncio.run(coro)
     
     return results
 
@@ -490,168 +506,6 @@ async def _execute_autonomous_agent_async(
             unique_results.append(doc)
     
     return unique_results, iteration_logs
-
-
-@traceable(name="agent_iteration", run_type="chain")
-def _execute_autonomous_agent(
-    query: str,
-    target_collections: List[str],
-    metadata: Dict[str, Any],
-) -> List[Document]:
-    """
-    Execute the ReAct agent loop for a single query.
-    
-    The agent decides at each step:
-    1. expand_query - Should I expand with synonyms?
-    2. extract_filters - Should I extract metadata filters?
-    3. keyword_search / semantic_search / hybrid_search - Which tool?
-    4. relax_filters - Should I broaden the search?
-    5. finish - Have I found enough results?
-    """
-    # Agent state
-    results: List[Document] = []
-    
-    # Initialize filters with collection from target_collections
-    # This ensures collection filtering is always applied
-    filters: Optional[MetadataFilter] = None
-    if len(target_collections) == 1:
-        filters = MetadataFilter(collection=target_collections[0])
-        logger.info(f"Initialized filter with collection: {target_collections[0]}")
-    
-    expanded_terms: List[str] = []
-    attempts = 0
-    last_result = "Starting search"
-    iteration_logs = []
-    chapter_found = False  # Track if find_chapter has been called
-    
-    # ReAct loop
-    for iteration in range(MAX_AGENT_ITERATIONS):
-        logger.info(f"Agent iteration {iteration + 1}/{MAX_AGENT_ITERATIONS}")
-        
-        # Get agent decision
-        action, action_input, thought = _get_agent_decision(
-            query=query,
-            sub_queries=[query],
-            results_count=len(results),
-            attempts=attempts,
-            last_result=last_result,
-        )
-        
-        iteration_log = {
-            "iteration": iteration + 1,
-            "thought": thought,
-            "action": action,
-            "action_input": action_input,
-        }
-        
-        logger.info(f"Agent thought: {thought}")
-        logger.info(f"Agent action: {action}")
-        
-        # Execute action
-        if action == "expand_query":
-            expanded_terms, last_result = _agent_expand_query(query)
-            iteration_log["result"] = last_result
-            
-        elif action == "extract_filters":
-            filters, last_result = _agent_extract_filters(query, target_collections)
-            iteration_log["result"] = last_result
-            
-        elif action == "find_chapter":
-            # Prevent repeated find_chapter calls - force hybrid_search instead
-            if chapter_found:
-                logger.info(f"Chapter already found, forcing hybrid_search")
-                action = "hybrid_search"
-                k = action_input.get("k", PARALLEL_SEARCH_K)
-                new_results = _agent_hybrid_search(query, filters, k)
-                results.extend(new_results)
-                attempts += 1
-                last_result = f"Found {len(new_results)} results (auto-search after chapter found)"
-                iteration_log["action"] = "hybrid_search (auto)"
-                iteration_log["result"] = last_result
-            else:
-                subject = action_input.get("subject", query)
-                coll = action_input.get("collection")
-                if not coll and len(target_collections) == 1:
-                    coll = target_collections[0]
-                chapter_id, last_result = _agent_find_chapter(subject, coll)
-                if chapter_id:
-                    # Update or create filters with found chapter_id
-                    if filters is None:
-                        filters = MetadataFilter()
-                    filters.chapter_id = chapter_id
-                    chapter_found = True
-                iteration_log["result"] = last_result
-            
-        elif action == "keyword_search":
-            k = action_input.get("k", PARALLEL_SEARCH_K)
-            new_results = _agent_keyword_search(query, filters, k)
-            results.extend(new_results)
-            attempts += 1
-            last_result = f"Found {len(new_results)} results"
-            iteration_log["result"] = last_result
-            
-        elif action == "semantic_search":
-            k = action_input.get("k", PARALLEL_SEARCH_K)
-            new_results = _agent_semantic_search(query, filters, k)
-            results.extend(new_results)
-            attempts += 1
-            last_result = f"Found {len(new_results)} results"
-            iteration_log["result"] = last_result
-            
-        elif action == "hybrid_search":
-            k = action_input.get("k", PARALLEL_SEARCH_K)
-            new_results = _agent_hybrid_search(query, filters, k)
-            results.extend(new_results)
-            attempts += 1
-            last_result = f"Found {len(new_results)} results"
-            iteration_log["result"] = last_result
-            
-        elif action == "relax_filters":
-            level = action_input.get("level", 1)
-            if filters:
-                filters = filters.relax(level=level)
-                last_result = f"Relaxed filters to level {level}"
-            else:
-                last_result = "No filters to relax"
-            iteration_log["result"] = last_result
-            
-        elif action == "finish":
-            reason = action_input.get("reason", "Agent decided to finish")
-            last_result = reason
-            iteration_log["result"] = reason
-            iteration_logs.append(iteration_log)
-            break
-            
-        else:
-            logger.warning(f"Unknown action: {action}, defaulting to hybrid_search")
-            new_results = _agent_hybrid_search(query, filters, PARALLEL_SEARCH_K)
-            results.extend(new_results)
-            attempts += 1
-            last_result = f"Found {len(new_results)} results (fallback)"
-            iteration_log["result"] = last_result
-        
-        iteration_logs.append(iteration_log)
-        
-        # Auto-finish conditions
-        if len(results) >= 5 and attempts >= 1:
-            logger.info("Auto-finish: Sufficient results found")
-            break
-        
-        if attempts >= 3 and len(results) == 0:
-            logger.info("Auto-finish: Max attempts with no results")
-            break
-    
-    metadata["agent_iterations"].extend(iteration_logs)
-    
-    # Deduplicate results
-    seen_ids = set()
-    unique_results = []
-    for doc in results:
-        if doc.chunk_id not in seen_ids:
-            seen_ids.add(doc.chunk_id)
-            unique_results.append(doc)
-    
-    return unique_results
 
 
 @traceable(name="agent_decision", run_type="chain")
