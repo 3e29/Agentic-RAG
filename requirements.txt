@@ -1,0 +1,54 @@
+
+# Core LangChain
+langchain==0.3.13
+langchain-community==0.3.13
+langchain-core==0.3.28
+langgraph==0.2.59
+langsmith
+
+# Embeddings & ML
+sentence-transformers==3.3.1
+transformers==4.48.1
+torch==2.5.1
+modal
+httpx
+# Vector Database
+chromadb
+
+# Agent State Persistence 
+redis
+
+# Observability
+langfuse==2.57.0
+
+# Data Processing
+pandas==2.2.3
+numpy==2.2.1
+python-dotenv==1.0.1
+
+# API
+fastapi==0.115.6
+uvicorn==0.34.0
+pydantic==2.10.5
+
+# Arabic Processing
+pyarabic==0.6.15
+camel-tools==1.5.7
+nltk>=3.8  # ISRIStemmer for Arabic root extraction (general NLP, not overfitting)
+
+# Development (Optional)
+jupyter==1.1.1
+pytest==8.3.4
+black==24.10.0
+
+# Production Web Server
+gunicorn
+
+
+
+
+# Create and activate environment
+# python -m venv venv
+# venv\Scripts\activate
+
+ 

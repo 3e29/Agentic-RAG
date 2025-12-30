@@ -1,0 +1,40 @@
+2025-11-17 11:10:51,649 - chromadb.telemetry.product.posthog - INFO - Anonymized telemetry enabled. See                     https://docs.trychroma.com/telemetry for more information.
+2025-11-17 11:10:52,138 - __main__ - INFO - Initialized ChromaDB client at ./data/chroma_db
+2025-11-17 11:10:52,885 - __main__ - INFO - ================================================================================
+2025-11-17 11:10:52,885 - __main__ - INFO - Starting Hadith Data Ingestion Pipeline
+2025-11-17 11:10:52,885 - __main__ - INFO - Collections to process: 2
+2025-11-17 11:10:52,886 - __main__ - INFO - ================================================================================
+2025-11-17 11:10:52,888 - __main__ - INFO - Initializing ChromaDB collection: hadith_collection
+2025-11-17 11:10:52,980 - __main__ - INFO - Collection currently contains 0 documents
+2025-11-17 11:10:52,981 - __main__ - INFO - 
+================================================================================
+2025-11-17 11:10:52,981 - __main__ - INFO - Processing: ./data/raw/bukhari.json
+2025-11-17 11:10:52,981 - __main__ - INFO - ================================================================================
+2025-11-17 11:10:52,982 - __main__ - INFO - Loading data from ./data/raw/bukhari.json
+2025-11-17 11:10:53,097 - __main__ - INFO - Successfully loaded JSON with 97 chapters
+2025-11-17 11:10:53,117 - __main__ - INFO - Extracted 7277 hadiths from JSON
+2025-11-17 11:10:53,118 - __main__ - INFO - Processing 7277 hadiths from bukhari in batches of 50
+2025-11-17 11:10:53,118 - __main__ - INFO - [bukhari] Batch 1/146 (50 hadiths)
+2025-11-17 11:18:48,023 - chromadb.telemetry.product.posthog - INFO - Anonymized telemetry enabled. See                     https://docs.trychroma.com/telemetry for more information.
+2025-11-17 11:18:48,330 - __main__ - INFO - Initialized ChromaDB client at ./data/chroma_db
+2025-11-17 11:18:48,779 - __main__ - INFO - ================================================================================
+2025-11-17 11:18:48,779 - __main__ - INFO - Starting Hadith Data Ingestion Pipeline
+2025-11-17 11:18:48,779 - __main__ - INFO - Collections to process: 2
+2025-11-17 11:18:48,779 - __main__ - INFO - ================================================================================
+2025-11-17 11:18:48,780 - __main__ - INFO - Initializing ChromaDB collection: hadith_collection
+2025-11-17 11:18:48,839 - __main__ - INFO - Collection currently contains 0 documents
+2025-11-17 11:18:48,839 - __main__ - INFO - 
+================================================================================
+2025-11-17 11:18:48,839 - __main__ - INFO - Processing: ./data/raw/bukhari.json
+2025-11-17 11:18:48,839 - __main__ - INFO - ================================================================================
+2025-11-17 11:18:48,840 - __main__ - INFO - Loading data from ./data/raw/bukhari.json
+2025-11-17 11:18:48,943 - __main__ - INFO - Successfully loaded JSON with 97 chapters
+2025-11-17 11:18:48,955 - __main__ - INFO - Extracted 7277 hadiths from JSON
+2025-11-17 11:18:48,955 - __main__ - INFO - Processing 7277 hadiths from bukhari in batches of 50
+2025-11-17 11:18:48,955 - __main__ - INFO - [bukhari] Batch 1/146 (50 hadiths)
+2025-11-17 11:19:01,049 - urllib3.connectionpool - WARNING - Retrying (Retry(total=1, connect=1, read=2, redirect=None, status=None)) after connection broken by 'NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000001D33B7B1310>: Failed to resolve 'us.i.posthog.com' ([Errno 11001] getaddrinfo failed)")': /batch/
+2025-11-17 11:19:17,675 - urllib3.connectionpool - WARNING - Retrying (Retry(total=0, connect=0, read=2, redirect=None, status=None)) after connection broken by 'NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000001D33BE66450>: Failed to resolve 'us.i.posthog.com' ([Errno 11001] getaddrinfo failed)")': /batch/
+2025-11-17 11:19:33,718 - backoff - INFO - Backing off send_request(...) for 0.3s (requests.exceptions.ConnectionError: HTTPSConnectionPool(host='us.i.posthog.com', port=443): Max retries exceeded with url: /batch/ (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000001D33BE665A0>: Failed to resolve 'us.i.posthog.com' ([Errno 11001] getaddrinfo failed)")))
+2025-11-17 11:19:47,335 - urllib3.connectionpool - WARNING - Retrying (Retry(total=1, connect=1, read=2, redirect=None, status=None)) after connection broken by 'NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000001D33BE66750>: Failed to resolve 'us.i.posthog.com' ([Errno 11001] getaddrinfo failed)")': /batch/
+2025-11-17 11:20:00,642 - urllib3.connectionpool - WARNING - Retrying (Retry(total=0, connect=0, read=2, redirect=None, status=None)) after connection broken by 'NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000001D33BE66FF0>: Failed to resolve 'us.i.posthog.com' ([Errno 11001] getaddrinfo failed)")': /batch/
+2025-11-17 11:20:21,041 - backoff - INFO - Backing off send_request(...) for 1.2s (requests.exceptions.ConnectionError: HTTPSConnectionPool(host='us.i.posthog.com', port=443): Max retries exceeded with url: /batch/ (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000001D33BE671A0>: Failed to resolve 'us.i.posthog.com' ([Errno 11001] getaddrinfo failed)")))
