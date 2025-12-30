@@ -16,7 +16,7 @@ The system uses a decoupled "Brain" (orchestrator) and "Muscle" (models) archite
 * **Vector Database (The Memory):** **ChromaDB** (using `PersistentClient`). This database is stored in a local directory (`./hadith_db`) and contains the 15,000 Hadith vectors.
 * **Models (The Muscle):** Hosted on **Modal** for scalable, serverless GPU inference. We interact with two key endpoints:
     * **LLM Endpoint (`/generate`):** Uses `qwen2.5-14b-instruct` for all reasoning, evaluation, and text generation tasks.
-    * **Embedding Endpoint (`/embed`):** Uses `intfloat/multilingual-e5-large` for vectorizing user queries and (one-time) a-priori document ingestion.
+    * **Embedding Endpoint (`/embed`):** Uses `bge-m3` for vectorizing user queries and (one-time) a-priori document ingestion.
 
 ---
 
