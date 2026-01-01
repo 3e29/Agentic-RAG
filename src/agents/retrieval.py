@@ -106,6 +106,11 @@ def retrieval_agent(state: AgentState) -> Dict[str, Any]:
     feedback from the Evaluation Agent. The workflow (not this agent)
     controls whether to retry.
     
+    **Query Priority:**
+    - search_query: Optimized for embedding (stripped of question words)
+    - corrected_query: Full corrected query (fallback)
+    - normalized_query / original_query: Raw inputs (last resort)
+    
     **Routing Logic:**
     1. user_text/file_upload -> UserHadithProcessor
     2. metadata_query (longest/shortest) -> HadithRepository
@@ -119,26 +124,34 @@ def retrieval_agent(state: AgentState) -> Dict[str, Any]:
     """
     start_time = time.time()
     
-    # Get query from state
-    query = (
+    # Get the OPTIMIZED search query for embedding (priority order)
+    search_query = (
+        state.get("search_query") or  # Best: optimized for embedding
         state.get("corrected_query") or 
         state.get("normalized_query") or 
         state.get("original_query", "")
     )
     
-    if not query:
+    # Also keep original/corrected query for logging and context
+    original_query = state.get("original_query", "")
+    corrected_query = state.get("corrected_query", search_query)
+    
+    if not search_query:
         logger.error("Retrieval agent called with no query")
         return {
             "retrieved_docs": [],
             "metadata": _update_metadata(state, {"error": "No query provided"})
         }
     
-    logger.info(f"Starting retrieval for: '{query[:100]}...'")
+    logger.info(f"Starting retrieval with search_query: '{search_query[:100]}...'")
+    if search_query != corrected_query:
+        logger.info(f"(Original corrected query was: '{corrected_query[:100]}...')")
     
     # Initialize metadata
     retrieval_metadata = {
         "agent": "retrieval_v4",
-        "query_used": query,
+        "search_query_used": search_query,  # The optimized query for embedding
+        "original_query": original_query,    # For reference
         "stages": [],
         "errors": [],
         "search_strategy": "default",
@@ -160,16 +173,17 @@ def retrieval_agent(state: AgentState) -> Dict[str, Any]:
     query_intent = state.get("query_intent", "thematic_search")
     
     if input_source == "user_text":
-        result = _handle_user_text(query, state, retrieval_metadata)
+        result = _handle_user_text(search_query, state, retrieval_metadata)
     elif input_source == "file_upload":
-        result = _handle_user_text(query, state, retrieval_metadata)
+        result = _handle_user_text(search_query, state, retrieval_metadata)
     elif query_intent == "metadata_query":
-        result = _handle_metadata_query(query, state, retrieval_metadata)
+        # For metadata queries, use corrected_query (may need collection names)
+        result = _handle_metadata_query(corrected_query, state, retrieval_metadata)
     else:
         # Execute search based on feedback or default strategy
         strategy = _determine_search_strategy(suggested_actions, evaluation_feedback)
         retrieval_metadata["search_strategy"] = strategy
-        result = _execute_search_strategy(query, state, retrieval_metadata, strategy)
+        result = _execute_search_strategy(search_query, state, retrieval_metadata, strategy)
     
     execution_time = (time.time() - start_time) * 1000
     retrieval_metadata["total_execution_time_ms"] = execution_time

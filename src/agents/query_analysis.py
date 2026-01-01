@@ -156,25 +156,28 @@ def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
     
     logger.info("=== Stage 2/5: Typo Correction ===")
     
-    # Initialize desired_output_language
+    # Initialize desired_output_language and search_query
     desired_output_language = None
+    search_query = None
     
     try:
         typo_result = typo_correction_tool(normalized_query)
         corrected_query = typo_result.corrected_text
+        search_query = typo_result.search_query  # Optimized for embedding
         language = typo_result.language
         desired_output_language = typo_result.desired_output_language
         
         metadata["query_analysis"]["typo_correction"] = {
             "input": normalized_query,
             "corrected": corrected_query,
+            "search_query": search_query,
             "language": language,
             "desired_output_language": desired_output_language,
             "corrections_made": typo_result.corrections_made
         }
         metadata["query_analysis"]["stages_completed"].append("typo_correction")
         
-        logger.info(f"Typo correction complete. Language: {language}, Desired output: {desired_output_language}")
+        logger.info(f"Typo correction complete. Language: {language}, Desired output: {desired_output_language}, Search query: '{search_query[:50]}...'")
         
     except Exception as e:
         logger.error(f"Typo correction failed: {e}")
@@ -183,6 +186,7 @@ def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
             "error": str(e)
         })
         corrected_query = normalized_query
+        search_query = normalized_query  # Fallback to normalized
         language = "en"
         desired_output_language = None
         logger.warning("Using normalized query after typo correction failure")
@@ -321,6 +325,7 @@ def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
         "original_query": original_query,
         "normalized_query": normalized_query,
         "corrected_query": corrected_query,
+        "search_query": search_query,  # Optimized query for embedding
         "input_source": input_source,
         "query_intent": query_intent,
         "target_collections": target_collections,
@@ -339,6 +344,7 @@ def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
         f"  Original:     {original_query[:60]}...\n"
         f"  Normalized:   {normalized_query[:60]}...\n"
         f"  Corrected:    {corrected_query[:60]}...\n"
+        f"  Search Query: {search_query[:60] if search_query else 'N/A'}...\n"
         f"  Language:     {language}\n"
         f"  Desired Output: {desired_output_language}\n"
         f"  Input Source: {input_source}\n"
@@ -401,6 +407,7 @@ def analyze_query(query: str) -> Dict[str, Any]:
         "original_query": query,
         "normalized_query": None,
         "corrected_query": None,
+        "search_query": None,
         "input_source": None,
         "query_intent": None,
         "target_collections": None,

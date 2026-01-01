@@ -128,6 +128,7 @@ class TypoCorrectionOutput(BaseModel):
     """Structured output for typo correction."""
     
     corrected_text: str = Field(description="The corrected text with typos fixed")
+    search_query: str = Field(description="Optimized query for embedding - stripped of question words and meta-terms, contains only searchable content")
     language: Literal["ar", "en", "mixed"] = Field(description="Detected dominant language of the input text")
     desired_output_language: Literal["arabic", "english"] = Field(description="User's preferred language for results (explicit preference or inferred from query language)")
     corrections_made: List[str] = Field(default_factory=list, description="List of corrections applied")
@@ -358,9 +359,10 @@ def input_source_identification_tool(query: str) -> InputSourceOutput:
 @traceable(name="typo_correction_tool")
 def typo_correction_tool(query: str) -> TypoCorrectionOutput:
     """
-    Detect and correct spelling errors in user queries.
+    Detect and correct spelling errors in user queries, and extract optimized search query.
     
     Handles both Arabic and English text, with special attention to Arabic diacritics.
+    Also extracts a search_query optimized for embedding (stripped of question words).
     Uses centralized prompts from src/utils/prompts.py with temperature=0.0.
     """
     logger.info(f"Running typo correction on query: {query[:100]}...")
@@ -378,6 +380,26 @@ def typo_correction_tool(query: str) -> TypoCorrectionOutput:
         if total_alpha == 0:
             return "en"
         return "ar" if arabic_chars / total_alpha > 0.5 else "en"
+    
+    # Helper to extract search query as fallback
+    def extract_search_query_fallback(text: str) -> str:
+        """Simple fallback to extract searchable content."""
+        import re
+        # Remove common question patterns
+        patterns = [
+            r'^(من|ما|هل|أين|كيف|متى|لماذا|ماذا)\s+',  # Arabic question words
+            r'^(who|what|which|where|when|why|how)\s+',  # English question words  
+            r'(راوي|سند|متن|إسناد)',  # Arabic meta-terms
+            r'(narrator|chain|isnad|matn)',  # English meta-terms
+            r'^(أريد|أبحث|أعطني)\s+',  # Arabic action verbs
+            r'^(find|search|give me|show me)\s+',  # English action verbs
+            r'(هو|هي|هم|هن)\s+',  # Arabic pronouns
+            r'(is|are|the)\s+',  # English articles
+        ]
+        result = text
+        for pattern in patterns:
+            result = re.sub(pattern, '', result, flags=re.IGNORECASE)
+        return result.strip() or text  # Return original if stripping leaves empty
 
     try:
         response = call_llm_sync(
@@ -395,9 +417,13 @@ def typo_correction_tool(query: str) -> TypoCorrectionOutput:
             detected_lang = detect_dominant_language(query)
             parsed['desired_output_language'] = "arabic" if detected_lang == "ar" else "english"
         
+        # Ensure search_query is present (fallback to extracted)
+        if 'search_query' not in parsed or not parsed['search_query']:
+            parsed['search_query'] = extract_search_query_fallback(parsed.get('corrected_text', query))
+        
         result = TypoCorrectionOutput(**parsed)
         
-        logger.info(f"Typo correction completed. Language: {result.language}, Output: {result.desired_output_language}, Corrections: {len(result.corrections_made)}")
+        logger.info(f"Typo correction completed. Language: {result.language}, Output: {result.desired_output_language}, Search Query: '{result.search_query[:50]}...'")
         return result
         
     except Exception as e:
@@ -406,6 +432,7 @@ def typo_correction_tool(query: str) -> TypoCorrectionOutput:
         detected_lang = detect_dominant_language(query)
         return TypoCorrectionOutput(
             corrected_text=query,
+            search_query=extract_search_query_fallback(query),
             language=detected_lang,
             desired_output_language="arabic" if detected_lang == "ar" else "english",
             corrections_made=["Error occurred, no corrections applied"]

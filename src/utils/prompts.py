@@ -144,22 +144,60 @@ OUTPUT FORMAT (JSON only):
     # Typo Correction (Direct)
     # -------------------------------------------------------------------------
     "typo_correction": {
-        "system": """You are a text correction specialist for Islamic terminology.
+        "system": """You are a text correction and search optimization specialist for Islamic terminology.
 
-TASK: Correct typos, normalize the query text, and detect language preferences.
+TASK 1 - CORRECT TYPOS:
 - Fix ONLY obvious spelling errors (e.g., "Bukhri" -> "Bukhari")
 - Preserve Arabic text as-is (do not transliterate)
 - Detect the language of the user's QUESTION/INSTRUCTION
-- Detect if user explicitly requests results in a specific language
-- Detect if the user is searching for a specific text in a specific language
+
+TASK 2 - EXTRACT SEARCH QUERY:
+The vector database contains HADITH TEXTS, not questions. You must extract the SEARCHABLE CONTENT from the user's query.
+
+STRIP THESE FROM search_query:
+- Question words: من, ما, هل, أين, كيف, متى, لماذا, who, what, which, where, when, why, how
+- Meta-terms about hadith: راوي, سند, متن, إسناد, narrator, chain, isnad, matn
+- Action verbs: أريد, أبحث, أعطني, find, search, give me, show me, what is
+- Superlatives: أطول, أقصر, أكثر, longest, shortest, most
+
+KEEP IN search_query:
+- Actual hadith content/text
+- Topics and concepts (الصبر, الصلاة, patience, prayer)
+- Named entities (البخاري, مسلم, Bukhari, Muslim)
+- Specific hadith text snippets
+
+EXAMPLES:
+1. Query: "من هو راوي إنما الأعمال بالنيات؟"
+   corrected_text: "من هو راوي إنما الأعمال بالنيات؟"
+   search_query: "إنما الأعمال بالنيات"
+   (Stripped: من هو راوي - user wants narrator OF this hadith text)
+
+2. Query: "What are the hadiths about patience?"
+   corrected_text: "What are the hadiths about patience?"
+   search_query: "patience"
+   (Stripped: What are the hadiths about - meta question)
+
+3. Query: "أحاديث عن الصبر"
+   corrected_text: "أحاديث عن الصبر"
+   search_query: "الصبر"
+   (Stripped: أحاديث عن - meta phrase)
+
+4. Query: "Find the hadith that mentions actions are judged by intentions"
+   corrected_text: "Find the hadith that mentions actions are judged by intentions"
+   search_query: "actions are judged by intentions"
+   (Stripped: Find the hadith that mentions)
+
+5. Query: "ما هو أطول حديث في البخاري"
+   corrected_text: "ما هو أطول حديث في البخاري"
+   search_query: "البخاري"
+   (For metadata queries, keep collection name for filtering)
 
 CRITICAL RULES:
-1. DO NOT CHANGE MEANING: Never replace a valid word with a different word just because it's common.
-   - Example: "اذكار" (Remembrances) is NOT "آداب" (Etiquette). Keep "اذكار".
-   - Example: "صلاة" (Prayer) is NOT "زكاة" (Charity).
-2. NO FOREIGN LANGUAGES: NEVER translate or output text in Chinese, Russian, or any language other than Arabic/English.
-3. CONSERVATIVE APPROACH: If a word is valid, keep it. If unsure, keep it. Only fix clear typos.
-4. ARABIC SHADDA (ّ): Add Shadda to Arabic words ONLY where it is linguistically required for correct meaning/pronunciation. Use your knowledge to decide.
+1. search_query must contain ONLY text that could match hadith content
+2. If the query is about a specific hadith text, extract ONLY that text
+3. If the query is thematic (about a topic), extract ONLY the topic
+4. DO NOT CHANGE MEANING in corrected_text
+5. NO FOREIGN LANGUAGES: NEVER output Chinese, Russian, etc.
 
 LANGUAGE DETECTION AND PREFERENCE (Priority Order):
 1. EXPLICIT PREFERENCE (Highest Priority):
@@ -168,44 +206,23 @@ LANGUAGE DETECTION AND PREFERENCE (Priority Order):
 
 2. QUOTED/SEARCHED TEXT CONTENT:
    - If the user provides a specific hadith snippet or text to find:
-     - If the snippet is ARABIC -> desired_output_language: "arabic" (even if question is English)
-     - If the snippet is ENGLISH -> desired_output_language: "english" (even if question is Arabic)
-   - Example: "Find full hadith for: [Arabic Text]" -> "arabic"
+     - If the snippet is ARABIC -> desired_output_language: "arabic"
+     - If the snippet is ENGLISH -> desired_output_language: "english"
 
 3. DOMINANT LANGUAGE (Fallback):
-   - If neither above applies, use the language of the user's question/instruction.
-   - Question in Arabic -> "arabic"
-   - Question in English -> "english"
-
-EXAMPLES:
-1. Query: "أريد أحاديث عن الصبر بالإنجليزية"
-   desired_output_language: "english" (Explicit preference)
-
-2. Query: "Find the full hadith that contains: إنما الأعمال بالنيات"
-   desired_output_language: "arabic" (User provided Arabic text to find, so wants Arabic result)
-
-3. Query: "اريد الحديث الكامل الذي يحتوي على: Actions are judged by intentions"
-   desired_output_language: "english" (User provided English text to find, so wants English result)
-
-4. Query: "What is the hadith about intentions"
-   desired_output_language: "english" (English question, no specific Arabic quote)
-
-5. Query: "ما هي اذكار الصباح"
-   corrected_text: "ما هي اذكار الصباح" (Keep "اذكار", do NOT change to "آداب")
-   desired_output_language: "arabic"
+   - Use the language of the user's question/instruction
 
 NEGATIVE CONSTRAINTS:
 - Do NOT change the meaning (e.g. "adhkar" != "adab")
 - Do NOT translate Arabic to English or vice versa
-- Do NOT output Chinese characters
 - Output ONLY valid JSON
 
 OUTPUT FORMAT (JSON only):
-{"corrected_text": "<corrected_query>", "language": "en|ar|mixed", "desired_output_language": "arabic|english", "corrections_made": ["<correction1>", ...]}""",
+{"corrected_text": "<corrected_query>", "search_query": "<optimized_for_embedding>", "language": "en|ar|mixed", "desired_output_language": "arabic|english", "corrections_made": ["<correction1>", ...]}""",
         
-        "user_template": "Correct this query: \"\"\"{query}\"\"\"",
+        "user_template": "Correct this query and extract the search query: \"\"\"{query}\"\"\"",
         "temperature": 0.0,
-        "max_tokens": 250,
+        "max_tokens": 300,
     },
     
     # -------------------------------------------------------------------------

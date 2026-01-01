@@ -386,6 +386,7 @@ def run_pipeline(query: str):
         results["analysis"] = {
             "intent": analysis_result.get("query_intent", "unknown"),
             "corrected_query": analysis_result.get("corrected_query", query),
+            "search_query": analysis_result.get("search_query"),  # Optimized for embedding
             "language": analysis_result.get("language", "unknown"),
             "desired_output_language": analysis_result.get("desired_output_language"),
             "target_collections": analysis_result.get("target_collections", []),
@@ -445,6 +446,11 @@ def display_analysis(analysis: dict):
     
     if analysis.get("corrected_query") != st.session_state.get("last_query"):
         st.info(f"📝 Corrected Query: {analysis.get('corrected_query')}")
+    
+    # Show search query (optimized for embedding)
+    search_query = analysis.get("search_query")
+    if search_query and search_query != analysis.get("corrected_query"):
+        st.success(f"🔎 Search Query (for embedding): {search_query}")
     
     if analysis.get("target_collections"):
         st.write(f"🎯 Target Collections: {', '.join(analysis['target_collections'])}")

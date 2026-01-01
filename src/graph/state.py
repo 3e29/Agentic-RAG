@@ -106,6 +106,7 @@ class AgentState(TypedDict):
     original_query: str
     normalized_query: Optional[str]  # After regex normalization (no LLM)
     corrected_query: Optional[str]   # After LLM typo correction
+    search_query: Optional[str]      # Optimized query for embedding (stripped of question words)
     
     # -------------------------------------------------------------------------
     # Classification Fields  

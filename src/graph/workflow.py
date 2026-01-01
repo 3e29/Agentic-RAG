@@ -33,27 +33,40 @@ from src.agents.evaluation import evaluation_agent
 
 # Configuration
 MAX_WORKFLOW_ITERATIONS = 3  # Maximum retrieval-evaluation cycles
+ENABLE_EVALUATION_AGENT = True  # Set to True to enable evaluation loop
 
 
-def create_workflow() -> StateGraph:
+def create_workflow(enable_evaluation: bool = None) -> StateGraph:
     """
     Create and compile the Hadith RAG workflow.
     
-    Flow:
+    Args:
+        enable_evaluation: Override ENABLE_EVALUATION_AGENT config.
+                          If None, uses the global config.
+    
+    Flow (with evaluation):
     START -> query_analysis -> retrieval -> evaluation -> (continue/stop)
                                     ^                          |
                                     |__________________________| (if continue)
     
+    Flow (without evaluation):
+    START -> query_analysis -> retrieval -> END
+    
     Returns:
         Compiled StateGraph ready for execution
     """
+    # Determine if evaluation is enabled
+    use_evaluation = enable_evaluation if enable_evaluation is not None else ENABLE_EVALUATION_AGENT
+    
     # 1. Initialize the Graph
     builder = StateGraph(AgentState)
 
     # 2. Add Nodes
     builder.add_node("query_analysis", query_analysis_agent)
     builder.add_node("retrieval", retrieval_agent)
-    builder.add_node("evaluation", evaluation_agent)
+    
+    if use_evaluation:
+        builder.add_node("evaluation", evaluation_agent)
 
     # 3. Define Flow (Edges)
     # Start -> Query Analysis
@@ -62,19 +75,22 @@ def create_workflow() -> StateGraph:
     # Query Analysis -> Retrieval
     builder.add_edge("query_analysis", "retrieval")
 
-    # Retrieval -> Evaluation
-    builder.add_edge("retrieval", "evaluation")
+    if use_evaluation:
+        # Retrieval -> Evaluation
+        builder.add_edge("retrieval", "evaluation")
 
-    # 4. Define Conditional Edges (The "Loop" Logic)
-    # This is where the Evaluation Agent's decision controls the flow
-    builder.add_conditional_edges(
-        "evaluation",
-        route_after_evaluation,
-        {
-            "continue": "retrieval",  # Loop back for another search pass
-            "stop": END               # Proceed to output (or generation agent)
-        }
-    )
+        # 4. Define Conditional Edges (The "Loop" Logic)
+        builder.add_conditional_edges(
+            "evaluation",
+            route_after_evaluation,
+            {
+                "continue": "retrieval",
+                "stop": END
+            }
+        )
+    else:
+        # Simple flow: Retrieval -> END
+        builder.add_edge("retrieval", END)
 
     # 5. Compile and return
     return builder.compile()
@@ -141,6 +157,7 @@ def run_workflow(query: str) -> AgentState:
         "original_query": query,
         "normalized_query": None,
         "corrected_query": None,
+        "search_query": None,
         "input_source": None,
         "query_intent": None,
         "target_collections": None,
@@ -164,8 +181,11 @@ def run_workflow(query: str) -> AgentState:
 # Module exports
 # ============================================================================
 
-# Create a default workflow instance for import
+# Create default workflow instance (respects ENABLE_EVALUATION_AGENT setting)
 default_workflow = create_workflow()
+
+# Convenience: Create workflow without evaluation for quick testing
+simple_workflow = create_workflow(enable_evaluation=False)
 
 
 if __name__ == "__main__":
