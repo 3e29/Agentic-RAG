@@ -1,20 +1,26 @@
 """
-Retrieval Agent for Hadith RAG System
+Retrieval Agent for Hadith RAG System (Refactored v4.0)
 
-This module implements the Retrieval Agent with two modes:
-1. **Autonomous Mode (ReAct Pattern)** - LLM dynamically decides which tools to use
-2. **Chain Mode** - Fixed Map-Reduce pipeline (legacy)
+This module implements the Retrieval Agent as a **single-pass search executor**.
+The ReAct loop logic has been moved to the LangGraph workflow, where the
+Evaluation Agent decides whether to retry.
 
-**Autonomous Agent Architecture:**
-- Uses ReAct (Reasoning + Acting) pattern
-- LLM decides: expand query? extract filters? which search tool? retry?
-- Iterative loop until sufficient results or max attempts
+**Architecture (Separation of Concerns):**
+- Retrieval Agent: "Execute this search strategy, return docs"
+- Evaluation Agent: "Assess quality, decide CONTINUE/STOP"
+- Workflow (LangGraph): "Route between agents based on decisions"
 
-**Key Features:**
-- Dynamic tool selection based on query characteristics
-- Self-correction: Agent decides when to relax filters
-- Observable in LangSmith as "agent" type (not "chain")
-- Graceful fallbacks at every stage
+**Key Changes from v3.x:**
+- REMOVED: Internal ReAct loop and `_get_agent_decision`
+- SIMPLIFIED: Agent executes ONE search pass per invocation
+- ADDED: Support for feedback-driven retry strategies
+
+**Supported Search Strategies:**
+1. default: Hybrid search (semantic + keyword)
+2. expand_query: Expand query terms first, then hybrid search
+3. keyword_search: BM25 keyword-only search
+4. semantic_search: Vector-only search
+5. relax_filters: Search with relaxed metadata filters
 
 **Production Standards:**
 - LangGraph integration for workflow orchestration
@@ -88,20 +94,22 @@ from src.config.settings import (
 )
 
 # ============================================================================
-# Autonomous Retrieval Agent (ReAct Pattern)
+# Retrieval Agent (Single-Pass Executor)
 # ============================================================================
 
 @traceable(name="retrieval_agent", run_type="chain")
 def retrieval_agent(state: AgentState) -> Dict[str, Any]:
     """
-    Main Retrieval Agent node for LangGraph workflow.
+    Retrieval Agent node for LangGraph workflow.
     
-    Uses ReAct (Reasoning + Acting) pattern where the LLM autonomously decides:
-    - Whether to expand the query
-    - Whether to extract metadata filters  
-    - Which search tool to use (keyword/semantic/hybrid)
-    - Whether to retry with relaxed filters
-    - When to stop searching
+    Executes a SINGLE search pass based on the current state and any
+    feedback from the Evaluation Agent. The workflow (not this agent)
+    controls whether to retry.
+    
+    **Routing Logic:**
+    1. user_text/file_upload -> UserHadithProcessor
+    2. metadata_query (longest/shortest) -> HadithRepository
+    3. Otherwise -> Hybrid/Semantic/Keyword search based on feedback
     
     Args:
         state: Current AgentState with query analysis results
@@ -125,18 +133,29 @@ def retrieval_agent(state: AgentState) -> Dict[str, Any]:
             "metadata": _update_metadata(state, {"error": "No query provided"})
         }
     
-    logger.info(f"Starting autonomous retrieval for: '{query[:100]}...'")
+    logger.info(f"Starting retrieval for: '{query[:100]}...'")
     
     # Initialize metadata
     retrieval_metadata = {
-        "agent": "retrieval_autonomous",
+        "agent": "retrieval_v4",
         "query_used": query,
-        "agent_iterations": [],
+        "stages": [],
         "errors": [],
-        "stages": [],  # Track processing stages
+        "search_strategy": "default",
     }
     
-    # Route based on input source
+    # Check for evaluation feedback (if this is a retry)
+    evaluation_feedback = state.get("evaluation_feedback")
+    suggested_actions = []
+    if state.get("metadata", {}).get("evaluation", {}).get("suggested_actions"):
+        suggested_actions = state["metadata"]["evaluation"]["suggested_actions"]
+    
+    if evaluation_feedback:
+        retrieval_metadata["retry_reason"] = evaluation_feedback
+        retrieval_metadata["suggested_actions"] = suggested_actions
+        logger.info(f"Retry requested with feedback: {evaluation_feedback}")
+    
+    # Route based on input source and intent
     input_source = state.get("input_source", "base_knowledge")
     query_intent = state.get("query_intent", "thematic_search")
     
@@ -145,17 +164,18 @@ def retrieval_agent(state: AgentState) -> Dict[str, Any]:
     elif input_source == "file_upload":
         result = _handle_user_text(query, state, retrieval_metadata)
     elif query_intent == "metadata_query":
-        # Handle metadata-based queries (longest, shortest, most, count, etc.)
         result = _handle_metadata_query(query, state, retrieval_metadata)
     else:
-        # Use autonomous agent for base knowledge search
-        result = _autonomous_search(query, state, retrieval_metadata)
+        # Execute search based on feedback or default strategy
+        strategy = _determine_search_strategy(suggested_actions, evaluation_feedback)
+        retrieval_metadata["search_strategy"] = strategy
+        result = _execute_search_strategy(query, state, retrieval_metadata, strategy)
     
     execution_time = (time.time() - start_time) * 1000
     retrieval_metadata["total_execution_time_ms"] = execution_time
     
     logger.info(
-        f"Autonomous retrieval complete: {len(result)} documents in {execution_time:.1f}ms"
+        f"Retrieval complete: {len(result)} documents in {execution_time:.1f}ms"
     )
     
     return {
@@ -164,401 +184,287 @@ def retrieval_agent(state: AgentState) -> Dict[str, Any]:
     }
 
 
-@traceable(name="autonomous_search_loop", run_type="chain")
-def _autonomous_search(
+# ============================================================================
+# Search Strategy Execution
+# ============================================================================
+
+def _determine_search_strategy(
+    suggested_actions: List[str],
+    feedback: Optional[str],
+) -> str:
+    """
+    Determine the search strategy based on evaluation feedback.
+    
+    Maps suggested actions from Evaluation Agent to search strategies.
+    
+    Args:
+        suggested_actions: List of actions suggested by Evaluation Agent
+        feedback: Human-readable feedback string
+        
+    Returns:
+        Search strategy name
+    """
+    if not suggested_actions:
+        return "default"
+    
+    # Priority order for actions
+    action_to_strategy = {
+        "expand_query": "expand_query",
+        "relax_filters": "relax_filters",
+        "keyword_search": "keyword_search",
+        "semantic_search": "semantic_search",
+        "hybrid_search": "default",
+        "find_chapter": "find_chapter",
+    }
+    
+    for action in suggested_actions:
+        if action in action_to_strategy:
+            return action_to_strategy[action]
+    
+    return "default"
+
+
+@traceable(name="execute_search_strategy", run_type="chain")
+def _execute_search_strategy(
     query: str,
     state: AgentState,
     metadata: Dict[str, Any],
+    strategy: str,
 ) -> List[Document]:
     """
-    Autonomous search using ReAct pattern.
+    Execute the specified search strategy.
     
-    Delegates orchestration to SearchOrchestrator while keeping the agent
-    decision logic in this module.
-    
-    The orchestrator handles:
-    - Parallel execution of agents for sub-queries
-    - Result aggregation and reranking
-    - Chunk reassembly
-    
-    This function provides:
-    - State extraction and validation
-    - Metadata collection
-    - The agent executor function
-    """
-    # Get sub-queries from state (if query was decomposed)
-    sub_queries = state.get("sub_queries") or [query]
-    target_collections = state.get("target_collections") or ["bukhari", "muslim"]
-    query_language = state.get("language", "ar")
-    desired_output_language = state.get("desired_output_language")
-    query_intent = state.get("query_intent", "thematic_search")
-    
-    # Store metadata
-    metadata["sub_queries"] = sub_queries
-    metadata["target_collections"] = target_collections
-    metadata["query_language"] = query_language
-    metadata["desired_output_language"] = desired_output_language
-    metadata["query_intent"] = query_intent
-    metadata["stages"].append("autonomous_search")
-    
-    logger.info(
-        f"Processing {len(sub_queries)} sub-queries via orchestrator "
-        f"(lang={query_language}, output={desired_output_language}, intent={query_intent})"
-    )
-    
-    # Get the orchestrator and wire up the agent executor
-    orchestrator = get_search_orchestrator()
-    orchestrator.set_agent_executor(_execute_autonomous_agent_async)
-    
-    # Delegate to orchestrator for the full pipeline
-    # Handle both sync and async contexts safely
-    coro = orchestrator.orchestrate_search(
-        sub_queries=sub_queries,
-        target_collections=target_collections,
-        query_language=query_language,
-        desired_output_language=desired_output_language,
-        query_intent=query_intent,
-        metadata=metadata,
-    )
-    
-    try:
-        # Check if we're already in an async context
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop - safe to use asyncio.run()
-        loop = None
-    
-    if loop is not None:
-        # Already in async context - use nest_asyncio or run in thread
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(asyncio.run, coro)
-            results = future.result()
-    else:
-        # No async context - use asyncio.run() directly
-        results = asyncio.run(coro)
-    
-    return results
-
-
-async def _execute_autonomous_agent_async(
-    query: str,
-    target_collections: List[str],
-    query_language: str = "ar",
-    desired_output_language: Optional[str] = None,
-    query_intent: Optional[str] = None,
-    query_index: int = 0,
-) -> Tuple[List[Document], List[Dict[str, Any]]]:
-    """
-    Async version of autonomous agent execution for parallel processing.
+    This is the core search execution function that replaces the
+    old ReAct loop. Each strategy runs ONCE per invocation.
     
     Args:
         query: The search query
-        target_collections: Collections to search (bukhari, muslim)
-        query_language: Detected language of the query (ar/en/mixed)
-        desired_output_language: User's explicit preference for result language (arabic/english/None)
-        query_intent: Intent of the query (specific_lookup, thematic_search, etc.) - None means unknown
-        query_index: Index of this sub-query (for logging)
-    
-    Returns: (documents, iteration_logs)
+        state: Current agent state
+        metadata: Metadata dict to update
+        strategy: Strategy to execute
+        
+    Returns:
+        List of retrieved documents
     """
-    # Agent state
-    results: List[Document] = []
+    target_collections = state.get("target_collections") or ["bukhari", "muslim"]
+    desired_output_language = state.get("desired_output_language")
+    query_intent = state.get("query_intent", "thematic_search")
+    sub_queries = state.get("sub_queries") or [query]
     
-    # Initialize filters with collection from query analysis
-    # Language filter applied ONLY if user explicitly requested a specific language
-    filters: Optional[MetadataFilter] = MetadataFilter()
+    metadata["stages"].append(f"strategy_{strategy}")
+    metadata["target_collections"] = target_collections
+    
+    # Build initial filters
+    filters = MetadataFilter()
     if len(target_collections) == 1:
         filters.collection = target_collections[0]
-        logger.info(f"[Query {query_index}] Filter collection: {target_collections[0]}")
-    
-    # Apply language filter ONLY if user explicitly requested it
     if desired_output_language:
         filters.language = desired_output_language
-        logger.info(f"[Query {query_index}] Filter language: {desired_output_language} (user preference)")
     
-    # For specific_lookup intent, pre-extract hadith_id_in_book and other filters from query
-    # This ensures that queries like "حديث رقم 70" correctly filter by hadith_id_in_book
-    if query_intent == "specific_lookup":
-        logger.info(f"[Query {query_index}] Specific lookup detected - extracting metadata filters")
-        extracted_filters = extract_metadata_filters(query, use_llm=False)
-        
-        # Merge extracted filters with existing filters
-        # Use hadith_id_in_book (user-facing number) not internal hadith_id
-        if extracted_filters.hadith_id_in_book is not None:
-            filters.hadith_id_in_book = extracted_filters.hadith_id_in_book
-            logger.info(f"[Query {query_index}] Pre-extracted hadith_id_in_book: {filters.hadith_id_in_book}")
-        if extracted_filters.book_id is not None:
-            filters.book_id = extracted_filters.book_id
-            logger.info(f"[Query {query_index}] Pre-extracted book_id: {filters.book_id}")
-        if extracted_filters.chapter_id is not None:
-            filters.chapter_id = extracted_filters.chapter_id
-            logger.info(f"[Query {query_index}] Pre-extracted chapter_id: {filters.chapter_id}")
-        if extracted_filters.narrator:
-            filters.narrator = extracted_filters.narrator
-            logger.info(f"[Query {query_index}] Pre-extracted narrator: {filters.narrator}")
-        
-        # If we have a hadith_id_in_book, skip the agent loop and do direct lookup
-        if filters.hadith_id_in_book is not None:
-            logger.info(f"[Query {query_index}] Direct lookup for hadith_id_in_book={filters.hadith_id_in_book}")
-            direct_results = await asyncio.to_thread(
-                _agent_semantic_search, query, filters, 10
-            )
-            iteration_logs = [{
-                "query_index": query_index,
-                "iteration": 1,
-                "thought": "Direct lookup for specific hadith number in book",
-                "action": "semantic_search",
-                "action_input": {"query": query, "hadith_id_in_book": filters.hadith_id_in_book},
-                "result": f"Found {len(direct_results)} results for hadith #{filters.hadith_id_in_book}",
-            }]
-            return (direct_results, iteration_logs)
+    # Execute based on strategy
+    if strategy == "expand_query":
+        return _strategy_expand_and_search(query, sub_queries, filters, metadata)
     
-    expanded_terms: List[str] = []
-    attempts = 0
-    last_result = "Starting search"
-    iteration_logs = []
-    chapter_found = False  # Track if find_chapter has been called
+    elif strategy == "keyword_search":
+        return _strategy_keyword_search(query, sub_queries, filters, metadata)
     
-    # ReAct loop
-    for iteration in range(MAX_AGENT_ITERATIONS):
-        logger.info(f"[Query {query_index}] Agent iteration {iteration + 1}/{MAX_AGENT_ITERATIONS}")
-        
-        # Get agent decision (run in thread pool to avoid blocking)
-        action, action_input, thought = await asyncio.to_thread(
-            _get_agent_decision,
-            query=query,
-            sub_queries=[query],
-            results_count=len(results),
-            attempts=attempts,
-            last_result=last_result,
-        )
-        
-        iteration_log = {
-            "query_index": query_index,
-            "iteration": iteration + 1,
-            "thought": thought,
-            "action": action,
-            "action_input": action_input,
-        }
-        
-        logger.info(f"[Query {query_index}] Agent action: {action}")
-        
-        # Execute action (in thread pool for sync functions)
-        if action == "expand_query":
-            expanded_terms, last_result = await asyncio.to_thread(
-                _agent_expand_query, query
-            )
-            iteration_log["result"] = last_result
-            
-        elif action == "extract_filters":
-            # Extract new filters but PRESERVE the language filter
-            existing_language = filters.language if filters else None
-            new_filters, last_result = await asyncio.to_thread(
-                _agent_extract_filters, query, target_collections
-            )
-            if new_filters:
-                # Merge: keep existing language filter if new_filters doesn't have one
-                if existing_language and not new_filters.language:
-                    new_filters.language = existing_language
-                filters = new_filters
-            iteration_log["result"] = last_result
-            
-            # Auto-execute semantic search if we have a hadith_id filter (specific lookup)
-            if filters and filters.hadith_id:
-                logger.info(f"[Query {query_index}] Auto-search: hadith_id filter detected")
-                new_results = await asyncio.to_thread(
-                    _agent_semantic_search, query, filters, PARALLEL_SEARCH_K
-                )
-                results.extend(new_results)
-                attempts += 1
-                last_result = f"Found {len(new_results)} results for hadith #{filters.hadith_id}"
-                iteration_log["result"] = last_result
-            
-        elif action == "find_chapter":
-            # Prevent repeated find_chapter calls - force hybrid_search instead
-            if chapter_found:
-                logger.info(f"[Query {query_index}] Chapter already found, forcing hybrid_search")
-                action = "hybrid_search"
-                k = action_input.get("k", PARALLEL_SEARCH_K)
-                new_results = await asyncio.to_thread(
-                    _agent_hybrid_search, query, filters, k
-                )
-                results.extend(new_results)
-                attempts += 1
-                last_result = f"Found {len(new_results)} results (auto-search after chapter found)"
-                iteration_log["action"] = "hybrid_search (auto)"
-                iteration_log["result"] = last_result
-            else:
-                subject = action_input.get("subject", query)
-                coll = action_input.get("collection")
-                if not coll and len(target_collections) == 1:
-                    coll = target_collections[0]
-                chapter_id, last_result = await asyncio.to_thread(
-                    _agent_find_chapter, subject, coll
-                )
-                if chapter_id:
-                    # Update or create filters with found chapter_id
-                    if filters is None:
-                        filters = MetadataFilter()
-                    filters.chapter_id = chapter_id
-                    chapter_found = True
-                iteration_log["result"] = last_result
-            
-        elif action == "keyword_search":
-            # Always use PARALLEL_SEARCH_K for initial retrieval, cross-encoder will filter to top results
-            k = PARALLEL_SEARCH_K
-            # Priority: 1. Agent's refined query 2. Expanded terms 3. Original query
-            if "query" in action_input and action_input["query"]:
-                search_query = action_input["query"]
-            elif len(expanded_terms) >= 2:
-                search_query = ' '.join(expanded_terms[:4])
-            else:
-                search_query = query
-                
-            new_results = await asyncio.to_thread(
-                _agent_keyword_search, search_query, filters, k
-            )
-            results.extend(new_results)
-            attempts += 1
-            last_result = f"Found {len(new_results)} results"
-            iteration_log["result"] = last_result
-            
-        elif action == "semantic_search":
-            # Always use PARALLEL_SEARCH_K for initial retrieval, cross-encoder will filter to top results
-            k = PARALLEL_SEARCH_K
-            # Priority: 1. Agent's refined query 2. Expanded terms 3. Original query
-            if "query" in action_input and action_input["query"]:
-                search_query = action_input["query"]
-            elif len(expanded_terms) >= 2:
-                search_query = ' '.join(expanded_terms[:4])
-            else:
-                search_query = query
-                
-            new_results = await asyncio.to_thread(
-                _agent_semantic_search, search_query, filters, k
-            )
-            results.extend(new_results)
-            attempts += 1
-            last_result = f"Found {len(new_results)} results"
-            iteration_log["result"] = last_result
-            
-        elif action == "hybrid_search":
-            # Always use PARALLEL_SEARCH_K for initial retrieval, cross-encoder will filter to top results
-            k = PARALLEL_SEARCH_K
-            # Priority: 1. Agent's refined query 2. Expanded terms 3. Original query
-            if "query" in action_input and action_input["query"]:
-                search_query = action_input["query"]
-            elif len(expanded_terms) >= 2:
-                search_query = ' '.join(expanded_terms[:4])
-            else:
-                search_query = query
-                
-            new_results = await asyncio.to_thread(
-                _agent_hybrid_search, search_query, filters, k
-            )
-            results.extend(new_results)
-            attempts += 1
-            last_result = f"Found {len(new_results)} results"
-            iteration_log["result"] = last_result
-            
-        elif action == "relax_filters":
-            level = action_input.get("level", 1)
-            if filters:
-                filters = filters.relax(level=level)
-                last_result = f"Relaxed filters to level {level}"
-            else:
-                last_result = "No filters to relax"
-            iteration_log["result"] = last_result
-            
-        elif action == "finish":
-            reason = action_input.get("reason", "Agent decided to finish")
-            last_result = reason
-            iteration_log["result"] = reason
-            iteration_logs.append(iteration_log)
-            break
-            
-        else:
-            logger.warning(f"[Query {query_index}] Unknown action: {action}, defaulting to hybrid_search")
-            new_results = await asyncio.to_thread(
-                _agent_hybrid_search, query, filters, PARALLEL_SEARCH_K
-            )
-            results.extend(new_results)
-            attempts += 1
-            last_result = f"Found {len(new_results)} results (fallback)"
-            iteration_log["result"] = last_result
-        
-        iteration_logs.append(iteration_log)
-        
-        # Auto-finish conditions
-        if len(results) >= 5 and attempts >= 1:
-            logger.info(f"[Query {query_index}] Auto-finish: Sufficient results found")
-            break
-        
-        if attempts >= 3 and len(results) == 0:
-            logger.info(f"[Query {query_index}] Auto-finish: Max attempts with no results")
-            break
+    elif strategy == "semantic_search":
+        return _strategy_semantic_search(query, sub_queries, filters, metadata)
     
-    # Deduplicate results
-    seen_ids = set()
-    unique_results = []
-    for doc in results:
-        if doc.chunk_id not in seen_ids:
-            seen_ids.add(doc.chunk_id)
-            unique_results.append(doc)
+    elif strategy == "relax_filters":
+        return _strategy_relax_and_search(query, sub_queries, filters, metadata)
     
-    return unique_results, iteration_logs
+    elif strategy == "find_chapter":
+        return _strategy_find_chapter_and_search(query, sub_queries, filters, target_collections, metadata)
+    
+    else:  # default - hybrid search
+        return _strategy_hybrid_search(query, sub_queries, filters, metadata)
 
 
-@traceable(name="agent_decision", run_type="chain")
-def _get_agent_decision(
+@traceable(name="strategy_hybrid_search", run_type="chain")
+def _strategy_hybrid_search(
     query: str,
     sub_queries: List[str],
-    results_count: int,
-    attempts: int,
-    last_result: str,
-) -> Tuple[str, Dict[str, Any], str]:
-    """
-    Get the agent's next action using LLM.
+    filters: MetadataFilter,
+    metadata: Dict[str, Any],
+) -> List[Document]:
+    """Default hybrid search strategy."""
+    metadata["stages"].append("hybrid_search")
     
-    Uses call_llm_sync to avoid nested event loop issues when called
-    from asyncio.to_thread in parallel execution.
+    all_results = []
+    for sub_query in sub_queries:
+        results = _agent_hybrid_search(sub_query, filters, PARALLEL_SEARCH_K)
+        all_results.extend(results)
     
-    Returns: (action_name, action_input, thought)
-    """
-    system_message, prompt, temperature, max_tokens = format_prompt(
-        "retrieval", "autonomous_agent",
-        query=query,
-        sub_queries=str(sub_queries),
-        results_count=results_count,
-        attempts=attempts,
-        last_result=last_result,
+    # Aggregate and deduplicate
+    aggregated = aggregate_results(
+        raw_results=[all_results],
+        original_query=query,
+        top_k=DEFAULT_TOP_K,
+        use_reranker=True,
     )
     
-    try:
-        response = call_llm_sync(
-            prompt=prompt,
-            system_message=system_message,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            metadata={"tool": "autonomous_agent"}
-        )
-        
-        parsed = parse_json_response(response)
-        
-        action = parsed.get("action", "hybrid_search")
-        action_input = parsed.get("action_input", {})
-        thought = parsed.get("thought", "No reasoning provided")
-        
-        # Validate action_input is a dict
-        if not isinstance(action_input, dict):
-            action_input = {}
-        
-        return action, action_input, thought
-        
-    except Exception as e:
-        logger.warning(f"Agent decision failed: {e}, defaulting to hybrid_search")
-        return "hybrid_search", {"k": PARALLEL_SEARCH_K}, f"Error: {e}, using hybrid_search"
+    return aggregated.documents
+
+
+@traceable(name="strategy_expand_and_search", run_type="chain")
+def _strategy_expand_and_search(
+    query: str,
+    sub_queries: List[str],
+    filters: MetadataFilter,
+    metadata: Dict[str, Any],
+) -> List[Document]:
+    """Expand query terms, then hybrid search."""
+    metadata["stages"].append("expand_query")
+    
+    # Expand the main query
+    expanded_terms, expansion_result = _agent_expand_query(query)
+    metadata["expansion"] = {"terms": expanded_terms, "result": expansion_result}
+    
+    # Build expanded query
+    if expanded_terms:
+        expanded_query = ' '.join([query] + expanded_terms[:3])
+    else:
+        expanded_query = query
+    
+    # Execute hybrid search with expanded query
+    metadata["stages"].append("hybrid_search_expanded")
+    all_results = []
+    
+    for sub_query in sub_queries:
+        # Use expanded version of main query
+        search_query = expanded_query if sub_query == query else sub_query
+        results = _agent_hybrid_search(search_query, filters, PARALLEL_SEARCH_K)
+        all_results.extend(results)
+    
+    aggregated = aggregate_results(
+        raw_results=[all_results],
+        original_query=query,
+        top_k=DEFAULT_TOP_K,
+        use_reranker=True,
+    )
+    
+    return aggregated.documents
+
+
+@traceable(name="strategy_keyword_search", run_type="chain")
+def _strategy_keyword_search(
+    query: str,
+    sub_queries: List[str],
+    filters: MetadataFilter,
+    metadata: Dict[str, Any],
+) -> List[Document]:
+    """Keyword-only (BM25) search strategy."""
+    metadata["stages"].append("keyword_search")
+    
+    all_results = []
+    for sub_query in sub_queries:
+        results = _agent_keyword_search(sub_query, filters, PARALLEL_SEARCH_K)
+        all_results.extend(results)
+    
+    aggregated = aggregate_results(
+        raw_results=[all_results],
+        original_query=query,
+        top_k=DEFAULT_TOP_K,
+        use_reranker=True,
+    )
+    
+    return aggregated.documents
+
+
+@traceable(name="strategy_semantic_search", run_type="chain")
+def _strategy_semantic_search(
+    query: str,
+    sub_queries: List[str],
+    filters: MetadataFilter,
+    metadata: Dict[str, Any],
+) -> List[Document]:
+    """Semantic-only (vector) search strategy."""
+    metadata["stages"].append("semantic_search")
+    
+    all_results = []
+    for sub_query in sub_queries:
+        results = _agent_semantic_search(sub_query, filters, PARALLEL_SEARCH_K)
+        all_results.extend(results)
+    
+    aggregated = aggregate_results(
+        raw_results=[all_results],
+        original_query=query,
+        top_k=DEFAULT_TOP_K,
+        use_reranker=True,
+    )
+    
+    return aggregated.documents
+
+
+@traceable(name="strategy_relax_and_search", run_type="chain")
+def _strategy_relax_and_search(
+    query: str,
+    sub_queries: List[str],
+    filters: MetadataFilter,
+    metadata: Dict[str, Any],
+) -> List[Document]:
+    """Relax filters, then hybrid search."""
+    metadata["stages"].append("relax_filters")
+    
+    # Relax the filters
+    relaxed_filters = filters.relax(level=1) if filters else None
+    metadata["filters_relaxed"] = True
+    
+    # Execute hybrid search with relaxed filters
+    metadata["stages"].append("hybrid_search_relaxed")
+    all_results = []
+    
+    for sub_query in sub_queries:
+        results = _agent_hybrid_search(sub_query, relaxed_filters, PARALLEL_SEARCH_K)
+        all_results.extend(results)
+    
+    aggregated = aggregate_results(
+        raw_results=[all_results],
+        original_query=query,
+        top_k=DEFAULT_TOP_K,
+        use_reranker=True,
+    )
+    
+    return aggregated.documents
+
+
+@traceable(name="strategy_find_chapter_and_search", run_type="chain")
+def _strategy_find_chapter_and_search(
+    query: str,
+    sub_queries: List[str],
+    filters: MetadataFilter,
+    target_collections: List[str],
+    metadata: Dict[str, Any],
+) -> List[Document]:
+    """Find relevant chapter first, then search within it."""
+    metadata["stages"].append("find_chapter")
+    
+    # Find chapter
+    collection = target_collections[0] if len(target_collections) == 1 else None
+    chapter_id, chapter_result = _agent_find_chapter(query, collection)
+    metadata["chapter_lookup"] = {"chapter_id": chapter_id, "result": chapter_result}
+    
+    # Update filters with chapter
+    if chapter_id:
+        filters.chapter_id = chapter_id
+    
+    # Execute hybrid search with chapter filter
+    metadata["stages"].append("hybrid_search_chapter")
+    all_results = []
+    
+    for sub_query in sub_queries:
+        results = _agent_hybrid_search(sub_query, filters, PARALLEL_SEARCH_K)
+        all_results.extend(results)
+    
+    aggregated = aggregate_results(
+        raw_results=[all_results],
+        original_query=query,
+        top_k=DEFAULT_TOP_K,
+        use_reranker=True,
+    )
+    
+    return aggregated.documents
 
 
 # ============================================================================
@@ -753,11 +659,11 @@ def _handle_metadata_query(
     is_shortest = any(term in query_lower for term in ['أقصر', 'اقصر', 'shortest', 'short'])
     
     # If neither longest nor shortest detected, this is NOT a metadata query
-    # Fall back to autonomous search (e.g., "ما عدد الصلوات" is asking about content, not hadith stats)
+    # Fall back to default search (e.g., "ما عدد الصلوات" is asking about content, not hadith stats)
     if not is_longest and not is_shortest:
-        logger.info("Metadata query type not detected (not longest/shortest), falling back to autonomous search")
+        logger.info("Metadata query type not detected (not longest/shortest), falling back to default search")
         metadata["stages"].append("metadata_fallback_to_search")
-        return _autonomous_search(query, state, metadata)
+        return _execute_search_strategy(query, state, metadata, "default")
     
     # 2. Extract Filters & Resolve IDs
     narrator = None
@@ -863,9 +769,9 @@ def _handle_metadata_query(
     except Exception as e:
         logger.error(f"Metadata query failed: {e}")
         metadata["errors"].append({"stage": "metadata_query", "error": str(e)})
-        # Fall back to semantic search
-        logger.info("Falling back to semantic search")
-        return _autonomous_search(query, state, metadata)
+        # Fall back to default search
+        logger.info("Falling back to default search strategy")
+        return _execute_search_strategy(query, state, metadata, "default")
 
 
 # ============================================================================

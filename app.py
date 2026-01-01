@@ -87,15 +87,29 @@ def build_execution_graph(results: Dict[str, Any]) -> str:
     analysis = results.get("analysis", {})
     metadata = results.get("metadata", {})
     retrieval_meta = metadata.get("retrieval", {})
+    evaluation_meta = metadata.get("evaluation", {})
     
     query_intent = analysis.get("intent", "unknown")
     stages = retrieval_meta.get("stages", [])
     iterations = retrieval_meta.get("agent_iterations", [])
     
+    # Evaluation data
+    eval_status = evaluation_meta.get("status", "STOP")
+    eval_iteration = evaluation_meta.get("iteration", 0)
+    confidence_score = evaluation_meta.get("confidence_score", 0.0)
+    quality_score = evaluation_meta.get("quality_score", 0.0)
+    grounding_score = evaluation_meta.get("grounding_score", 0.0)
+    coverage_score = evaluation_meta.get("coverage_score", 0.0)
+    
     # Node styles
     executed_style = 'style="filled" fillcolor="#90EE90" color="#228B22"'  # Green
     skipped_style = 'style="filled" fillcolor="#D3D3D3" color="#808080"'   # Gray
     current_style = 'style="filled" fillcolor="#FFD700" color="#FF8C00"'   # Gold
+    continue_style = 'style="filled" fillcolor="#FFB347" color="#FF8C00"'  # Orange for continue
+    stop_style = 'style="filled" fillcolor="#32CD32" color="#228B22"'      # Bright green for stop
+    
+    # Determine evaluation style based on status
+    eval_decision_style = stop_style if eval_status == "STOP" else continue_style
     
     # Build DOT graph
     dot = '''
@@ -184,6 +198,18 @@ def build_execution_graph(results: Dict[str, Any]) -> str:
             ret_reassemble [label="🔧 Reassemble\\nChunks" ''' + executed_style + '''];
         }
         
+        // Evaluation Agent Stage
+        subgraph cluster_evaluation {
+            label="Evaluation Agent";
+            style=rounded;
+            bgcolor="#E8F5E9";
+            
+            eval_quality [label="📊 Quality\\nAssessment" ''' + executed_style + '''];
+            eval_gaps [label="🔍 Gap\\nIdentification" ''' + executed_style + '''];
+            eval_grounding [label="⚓ Grounding\\nValidation" ''' + executed_style + '''];
+            eval_decision [label="''' + ("✅ STOP" if eval_status == "STOP" else "🔄 CONTINUE") + '''\\n(confidence: ''' + f"{confidence_score:.2f}" + ''')" ''' + eval_decision_style + '''];
+        }
+        
         // End node
         end [label="📚 Results" shape=circle style="filled" fillcolor="#228B22" fontcolor="white"];
         
@@ -227,9 +253,25 @@ def build_execution_graph(results: Dict[str, Any]) -> str:
         ret_hybrid -> ret_aggregate;
             '''
     
+    # Connect retrieval to evaluation
     dot += '''
         ret_aggregate -> ret_reassemble;
-        ret_reassemble -> end;
+        ret_reassemble -> eval_quality;
+        
+        // Evaluation flow
+        eval_quality -> eval_gaps;
+        eval_gaps -> eval_grounding;
+        eval_grounding -> eval_decision;
+    '''
+    
+    # Connect evaluation to end or back to retrieval (if continue)
+    if eval_status == "CONTINUE" and eval_iteration < 3:
+        dot += '''
+        eval_decision -> ret_router [label="retry" style="dashed" color="#FF8C00"];
+        '''
+    
+    dot += '''
+        eval_decision -> end;
     }
     '''
     
@@ -250,11 +292,14 @@ def render_sidebar_graph(results: Optional[Dict[str, Any]] = None):
             start [label="🚀 Start" shape=circle style="filled" fillcolor="#4169E1" fontcolor="white"];
             qa [label="Query Analysis\\nAgent" style="filled" fillcolor="#E6F3FF"];
             ret [label="Retrieval\\nAgent" style="filled" fillcolor="#FFF3E6"];
+            eval [label="Evaluation\\nAgent" style="filled" fillcolor="#E8F5E9"];
             end [label="📚 Results" shape=circle style="filled" fillcolor="#D3D3D3"];
             
             start -> qa [label="query"];
             qa -> ret [label="state"];
-            ret -> end [label="docs"];
+            ret -> eval [label="docs"];
+            eval -> ret [label="continue" style="dashed" color="#FF8C00"];
+            eval -> end [label="stop"];
             
             note [label="Enter a query to see\\nthe execution flow" shape=note style="filled" fillcolor="#FFFACD"];
         }
@@ -265,8 +310,8 @@ def render_sidebar_graph(results: Optional[Dict[str, Any]] = None):
         st.sidebar.markdown("---")
         st.sidebar.markdown("**Legend:**")
         st.sidebar.markdown("🟢 Executed node")
+        st.sidebar.markdown("🟠 Continue (retry)")
         st.sidebar.markdown("⚪ Skipped node")
-        st.sidebar.markdown("🟡 Current node")
     else:
         # Build and render execution graph
         dot = build_execution_graph(results)
@@ -278,6 +323,7 @@ def render_sidebar_graph(results: Optional[Dict[str, Any]] = None):
         
         metadata = results.get("metadata", {})
         retrieval_meta = metadata.get("retrieval", {})
+        evaluation_meta = metadata.get("evaluation", {})
         
         stages = retrieval_meta.get("stages", [])
         iterations = retrieval_meta.get("agent_iterations", [])
@@ -289,6 +335,28 @@ def render_sidebar_graph(results: Optional[Dict[str, Any]] = None):
             total_time = sum(results["timings"].values()) * 1000
             st.sidebar.metric("Total Time", f"{total_time:.0f}ms")
         
+        # Show evaluation metrics
+        if evaluation_meta:
+            st.sidebar.markdown("---")
+            st.sidebar.markdown("**Evaluation:**")
+            
+            eval_status = evaluation_meta.get("status", "N/A")
+            confidence = evaluation_meta.get("confidence_score", 0.0)
+            quality = evaluation_meta.get("quality_score", 0.0)
+            grounding = evaluation_meta.get("grounding_score", 0.0)
+            coverage = evaluation_meta.get("coverage_score", 0.0)
+            
+            status_color = "🟢" if eval_status == "STOP" else "🟠"
+            st.sidebar.markdown(f"**Status:** {status_color} {eval_status}")
+            
+            col1, col2 = st.sidebar.columns(2)
+            with col1:
+                st.metric("Confidence", f"{confidence:.2f}" if confidence else "N/A")
+                st.metric("Quality", f"{quality:.2f}" if quality else "N/A")
+            with col2:
+                st.metric("Grounding", f"{grounding:.2f}" if grounding else "N/A")
+                st.metric("Coverage", f"{coverage:.2f}" if coverage else "N/A")
+        
         # Show stages list
         if stages:
             st.sidebar.markdown("**Stages Executed:**")
@@ -299,6 +367,8 @@ def render_sidebar_graph(results: Optional[Dict[str, Any]] = None):
 @traceable(name="full_pipeline_run")
 def run_pipeline(query: str):
     """Run the full pipeline and return results."""
+    from src.agents.evaluation import evaluation_agent
+    
     results = {
         "query": query,
         "analysis": None,
@@ -334,10 +404,26 @@ def run_pipeline(query: str):
         retrieval_result = retrieval_agent(state)
         results["documents"] = retrieval_result.get("retrieved_docs", [])
         results["metadata"] = retrieval_result.get("metadata", {})
+        state.update(retrieval_result)
         results["timings"]["retrieval"] = time.time() - start
     except Exception as e:
         results["metadata"]["error"] = str(e)
         results["timings"]["retrieval"] = time.time() - start
+        return results
+    
+    # Stage 3: Evaluation
+    start = time.time()
+    try:
+        evaluation_result = evaluation_agent(state)
+        # Merge evaluation metadata into results
+        eval_metadata = evaluation_result.get("metadata", {}).get("evaluation", {})
+        results["metadata"]["evaluation"] = eval_metadata
+        results["evaluation_feedback"] = evaluation_result.get("evaluation_feedback")
+        results["confidence_score"] = evaluation_result.get("confidence_score")
+        results["timings"]["evaluation"] = time.time() - start
+    except Exception as e:
+        results["metadata"]["evaluation"] = {"error": str(e)}
+        results["timings"]["evaluation"] = time.time() - start
     
     return results
 
@@ -450,11 +536,21 @@ def main():
     for col, example in zip(example_cols, examples):
         if col.button(example[:25] + "..." if len(example) > 25 else example, key=example):
             st.session_state.query_input = example
+            st.session_state["run_search"] = True
             st.rerun()
     
-    # Search button
-    if st.button("🔎 Search", type="primary", use_container_width=True) or query:
-        if query:
+    # Search button - only run when button is clicked (not on every rerun)
+    search_clicked = st.button("🔎 Search", type="primary", use_container_width=True)
+    
+    # Check if we should run a search (button clicked or flagged from example)
+    should_search = search_clicked or st.session_state.get("run_search", False)
+    
+    if should_search and query:
+        # Clear the flag
+        st.session_state["run_search"] = False
+        
+        # Only run if query changed or explicit search requested
+        if query != st.session_state.get("last_query") or search_clicked:
             st.session_state["last_query"] = query
             
             with st.spinner("Processing query..."):
@@ -488,22 +584,44 @@ def main():
             for i, doc in enumerate(documents, 1):
                 display_document(doc, i)
         
+        # Display Evaluation Results
+        if results.get("evaluation_feedback"):
+            st.markdown('<div class="stage-header">🔍 Stage 3: Evaluation Results</div>', unsafe_allow_html=True)
+            eval_meta = results.get("metadata", {}).get("evaluation", {})
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                status = eval_meta.get("status", "N/A")
+                status_icon = "✅" if status == "STOP" else "🔄"
+                st.metric("Status", f"{status_icon} {status}")
+            with col2:
+                st.metric("Confidence", f"{results.get('confidence_score', 0):.2f}")
+            with col3:
+                st.metric("Quality", f"{eval_meta.get('quality_score', 0) or 0:.2f}")
+            with col4:
+                st.metric("Grounding", f"{eval_meta.get('grounding_score', 0) or 0:.2f}")
+            
+            if results.get("evaluation_feedback"):
+                st.info(f"📋 **Feedback:** {results['evaluation_feedback']}")
+        
         # Timing info
         if show_timings and results.get("timings"):
             st.divider()
-            timing_cols = st.columns(3)
+            timing_cols = st.columns(4)
             timings = results["timings"]
             with timing_cols[0]:
                 st.metric("Analysis Time", f"{timings.get('analysis', 0)*1000:.0f}ms")
             with timing_cols[1]:
                 st.metric("Retrieval Time", f"{timings.get('retrieval', 0)*1000:.0f}ms")
             with timing_cols[2]:
+                st.metric("Evaluation Time", f"{timings.get('evaluation', 0)*1000:.0f}ms")
+            with timing_cols[3]:
                 total = sum(timings.values())
                 st.metric("Total Time", f"{total*1000:.0f}ms")
         
         # Metadata (optional)
         if show_metadata and results.get("metadata"):
-            with st.expander("🔧 Retrieval Metadata"):
+            with st.expander("🔧 Full Pipeline Metadata"):
                 st.json(results["metadata"])
     elif not st.session_state.get("last_query"):
         st.info("Please enter a query to search.")

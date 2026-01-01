@@ -125,6 +125,13 @@ class AgentState(TypedDict):
     retrieved_docs: Optional[List[dict]]  # Documents from retrieval agent
     
     # -------------------------------------------------------------------------
+    # Evaluation Fields (Added for Evaluation Agent)
+    # -------------------------------------------------------------------------
+    evaluation_feedback: Optional[str]              # Actionable feedback from evaluation
+    confidence_score: Optional[float]               # Confidence in retrieval quality (0-1)
+    missing_information_gaps: Optional[List[str]]   # Identified gaps in results
+    
+    # -------------------------------------------------------------------------
     # Language & Metadata
     # -------------------------------------------------------------------------
     language: Optional[Literal["ar", "en", "mixed"]]  # Detected query language
