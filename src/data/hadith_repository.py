@@ -28,6 +28,7 @@ import logging
 from functools import lru_cache
 from typing import Dict, List, Optional, Any, Tuple
 from chromadb.api import ClientAPI
+from rapidfuzz import fuzz
 
 from src.tools.retrieval.schemas import Document
 
@@ -360,6 +361,7 @@ class HadithRepository:
         self,
         collection: str = "bukhari",
         language: Optional[str] = None,
+        narrator: Optional[str] = None,
     ) -> Optional[Document]:
         """
         Find the longest hadith in a collection by total_chunks and text length.
@@ -367,6 +369,7 @@ class HadithRepository:
         Args:
             collection: Collection name (bukhari/muslim)
             language: Optional language filter
+            narrator: Optional narrator filter (partial match)
             
         Returns:
             Document with the longest hadith, or None if not found
@@ -375,12 +378,14 @@ class HadithRepository:
             collection=collection,
             language=language,
             find_longest=True,
+            narrator=narrator,
         )
     
     def get_shortest_hadith(
         self,
         collection: str = "bukhari",
         language: Optional[str] = None,
+        narrator: Optional[str] = None,
     ) -> Optional[Document]:
         """
         Find the shortest hadith in a collection by text length.
@@ -388,6 +393,7 @@ class HadithRepository:
         Args:
             collection: Collection name (bukhari/muslim)
             language: Optional language filter
+            narrator: Optional narrator filter (partial match)
             
         Returns:
             Document with the shortest hadith, or None if not found
@@ -396,6 +402,7 @@ class HadithRepository:
             collection=collection,
             language=language,
             find_longest=False,
+            narrator=narrator,
         )
     
     def _get_hadith_by_length(
@@ -403,6 +410,7 @@ class HadithRepository:
         collection: str,
         language: Optional[str],
         find_longest: bool,
+        narrator: Optional[str] = None,
     ) -> Optional[Document]:
         """
         Internal method to find hadith by length criteria.
@@ -411,6 +419,7 @@ class HadithRepository:
             collection: Collection name
             language: Optional language filter
             find_longest: True for longest, False for shortest
+            narrator: Optional narrator filter (partial match)
             
         Returns:
             Document or None
@@ -429,6 +438,13 @@ class HadithRepository:
             # Build hadith -> chunks mapping
             hadith_chunks: Dict[int, Dict[str, Any]] = {}
             
+            # Keywords that indicate a "reference" or "isnad-only" hadith (noise)
+            # e.g., "And narrated similarly...", "With this chain..."
+            NOISE_KEYWORDS = [
+                "بهذا الإسناد", "مثله", "نحوه", "وحدثناه", "وحدثنا", 
+                "similar to", "like it", "same chain"
+            ]
+            
             for doc_id, meta, text in zip(
                 all_docs['ids'],
                 all_docs['metadatas'],
@@ -437,12 +453,37 @@ class HadithRepository:
                 hadith_id = meta.get('hadith_id')
                 total_chunks = meta.get('total_chunks', 1)
                 lang = meta.get('language', 'arabic')
+                doc_narrator = meta.get('narrator', '')
                 
-                # Filter by language if specified
+                # 1. Filter by language if specified
                 if language:
                     if language == 'arabic' and lang != 'arabic':
                         continue
                     if language == 'english' and lang != 'english':
+                        continue
+                
+                # 2. Filter by Narrator (Fuzzy Match)
+                if narrator:
+                    doc_narrator_lower = doc_narrator.lower() if doc_narrator else ''
+                    narrator_lower = narrator.lower()
+                    
+                    # Fast path: Exact substring match
+                    is_match = narrator_lower in doc_narrator_lower
+                    
+                    # Slow path: Fuzzy match if exact failed
+                    if not is_match and doc_narrator:
+                        # Check similarity using rapidfuzz (returns 0-100)
+                        similarity = fuzz.ratio(narrator_lower, doc_narrator_lower)
+                        if similarity > 80:  # Allow small differences like 'h' at the end
+                            is_match = True
+                    
+                    if not is_match:
+                        continue
+                
+                # 3. Filter out "Noise" when looking for shortest hadith
+                # If text is very short (< 100 chars) AND contains reference keywords, skip it
+                if not find_longest and text and len(text) < 100:
+                    if any(kw in text for kw in NOISE_KEYWORDS):
                         continue
                 
                 if hadith_id not in hadith_chunks:
@@ -451,13 +492,13 @@ class HadithRepository:
                         'doc_ids': [doc_id],
                         'metadatas': [meta],
                         'texts': [text],
-                        'total_text_length': len(text),
+                        'total_text_length': len(text) if text else 0,
                     }
                 else:
                     hadith_chunks[hadith_id]['doc_ids'].append(doc_id)
                     hadith_chunks[hadith_id]['metadatas'].append(meta)
                     hadith_chunks[hadith_id]['texts'].append(text)
-                    hadith_chunks[hadith_id]['total_text_length'] += len(text)
+                    hadith_chunks[hadith_id]['total_text_length'] += len(text) if text else 0
                     if total_chunks > hadith_chunks[hadith_id]['total_chunks']:
                         hadith_chunks[hadith_id]['total_chunks'] = total_chunks
             

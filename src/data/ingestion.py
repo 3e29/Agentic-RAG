@@ -35,6 +35,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.utils.arabic_processing import normalize_arabic_text
 from src.utils.chunking import chunk_hadith, get_chunk_statistics
+from src.config.settings import MAX_RETRIES
 
 
 # Configure logging
@@ -51,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 MODAL_EMBED_URL = "https://sazaitet110--qwen2-5-14b-runner-qwenmodel-embed.modal.run"
-CHROMA_DB_PATH = "./data/chroma_db"
+CHROMA_DB_PATH = "./data/chroma_db_bge_m3"
 RAW_DATA_PATHS = [
     "./data/raw/bukhari.json",
     "./data/raw/muslim.json"
@@ -60,7 +61,6 @@ COLLECTION_NAME = "hadith_collection"
 BATCH_SIZE = 50  # Number of chunks to embed in one batch
 MAX_CHUNK_SIZE = 800  # Maximum characters per chunk (≈400 tokens)
 CHUNK_OVERLAP = 1  # Number of sentences to overlap between chunks
-MAX_RETRIES = 3
 RETRY_DELAY = 2  # seconds
 
 

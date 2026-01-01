@@ -24,6 +24,7 @@ import logging
 from typing import List, Optional, Dict, Any
 import httpx
 from langsmith import traceable
+from src.config.settings import MAX_RETRIES
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -33,7 +34,6 @@ EMBEDDING_ENDPOINT = "https://sazaitet110--gte-multilingual-embeddings-embed.mod
 
 # Request configuration
 DEFAULT_TIMEOUT = 60.0  # seconds
-MAX_RETRIES = 3
 RETRY_BACKOFF = 2.0  # exponential backoff multiplier
 
 # Embedding dimension (gte-multilingual-base)

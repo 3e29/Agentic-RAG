@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any
 import httpx
 from langsmith import traceable
 from langsmith.run_helpers import get_current_run_tree
+from src.config.settings import MAX_RETRIES
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -22,7 +23,6 @@ QWEN_ENDPOINT = "https://alaapocket3--qwen2-5-14b-instruct-qwenendpoint-generate
 
 # Request configuration
 DEFAULT_TIMEOUT = 120.0  # seconds (increased for complex queries)
-MAX_RETRIES = 3
 RETRY_BACKOFF = 2.0  # exponential backoff multiplier
 
 

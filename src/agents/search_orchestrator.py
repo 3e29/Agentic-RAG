@@ -34,12 +34,9 @@ from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
 from src.tools.retrieval.schemas import Document, AggregatedResults
 from src.tools.retrieval.aggregation_tools import aggregate_results
 from src.data.hadith_repository import HadithRepository, get_hadith_repository
+from src.config.settings import DEFAULT_TOP_K, PARALLEL_SEARCH_K
 
 logger = logging.getLogger(__name__)
-
-# Constants
-DEFAULT_TOP_K = 5  # Final results per sub-query after reranking
-PARALLEL_SEARCH_K = 50  # Fetch 50 hadiths per search for better cross-encoder reranking
 
 
 class SearchOrchestrator:

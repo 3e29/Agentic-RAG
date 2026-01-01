@@ -79,12 +79,13 @@ from src.agents.search_orchestrator import (
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Constants
-MAX_AGENT_ITERATIONS = 5  # Max ReAct loop iterations
-MAX_RETRIES = 3
-DEFAULT_TOP_K = 5  # Final results after reranking
-PARALLEL_SEARCH_K = 50  # Fetch 50 hadiths per search for better cross-encoder reranking
-
+# Import configuration constants
+from src.config.settings import (
+    MAX_AGENT_ITERATIONS,
+    MAX_RETRIES,
+    DEFAULT_TOP_K,
+    PARALLEL_SEARCH_K,
+)
 
 # ============================================================================
 # Autonomous Retrieval Agent (ReAct Pattern)
@@ -757,6 +758,52 @@ def _handle_metadata_query(
         metadata["stages"].append("metadata_fallback_to_search")
         return _autonomous_search(query, state, metadata)
     
+    # Common mappings for metadata matching (Arabic Query -> English DB Metadata)
+    NARRATOR_MAPPING = {
+        "أبو هريرة": "Abu Huraira",
+        "ابو هريرة": "Abu Huraira",
+        "عائشة": "Aisha",
+        "عائشه": "Aisha",
+        "أنس": "Anas",
+        "أنس بن مالك": "Anas",
+        "ابن عمر": "Ibn Umar",
+        "عبد الله بن عمر": "Ibn Umar",
+        "جابر": "Jabir",
+        "أبو سعيد": "Abu Said",
+        "ابن عباس": "Ibn Abbas",
+        "عبد الله بن عباس": "Ibn Abbas",
+        "ابن مسعود": "Ibn Masud",
+        "عبد الله بن مسعود": "Ibn Masud",
+    }
+    
+    # Extract narrator from the query using the existing extraction tool
+    narrator = None
+    try:
+        # Try regex first
+        extracted = extract_metadata_filters(query, use_llm=False)
+        if extracted.narrator:
+            narrator = extracted.narrator
+        
+        # If regex failed OR gave us Arabic text not in our map, try LLM for better normalization
+        is_arabic_narrator = narrator and any('\u0600' <= c <= '\u06FF' for c in narrator)
+        
+        if not narrator or (is_arabic_narrator and narrator not in NARRATOR_MAPPING):
+            logger.info("Using LLM to extract/normalize narrator for metadata query")
+            extracted_llm = extract_metadata_filters(query, use_llm=True)
+            if extracted_llm.narrator:
+                narrator = extracted_llm.narrator
+        
+        # Normalize Arabic Narrator to English (Database Format)
+        if narrator and narrator in NARRATOR_MAPPING:
+            original_narrator = narrator
+            narrator = NARRATOR_MAPPING[narrator]
+            logger.info(f"Normalized narrator: {original_narrator} -> {narrator}")
+        
+        if narrator:
+            logger.info(f"Metadata query applying narrator filter: {narrator}")
+    except Exception as e:
+        logger.warning(f"Failed to extract narrator for metadata query: {e}")
+    
     # Use the repository for data access
     repo = repository or get_hadith_repository()
     
@@ -768,11 +815,13 @@ def _handle_metadata_query(
                 doc = repo.get_longest_hadith(
                     collection=coll_name,
                     language=desired_language,
+                    narrator=narrator,
                 )
             else:
                 doc = repo.get_shortest_hadith(
                     collection=coll_name,
                     language=desired_language,
+                    narrator=narrator,
                 )
             
             if doc:

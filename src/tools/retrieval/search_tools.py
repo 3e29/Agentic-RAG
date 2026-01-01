@@ -17,21 +17,16 @@ Implements the core search functionality using Modal API endpoints:
 - NO prefix required (unlike E5's "passage:"/"query:")
 - Also supports sparse vectors for hybrid search
 
-**Optimization (v3.0) - GIL-Free BM25 Execution**
-- ProcessPoolExecutor for CPU-bound BM25 scoring (avoids Python GIL contention)
-- ThreadPoolExecutor for I/O-bound operations (ChromaDB queries, HTTP calls)
-- LRU cache for repeated queries (~1ms cache hits vs ~270ms cold search)
+**Optimization (v3.1) - ThreadPool with Caching**
+- ThreadPoolExecutor for all async operations (BM25, ChromaDB, HTTP)
+- Manual cache for repeated queries (~1ms cache hits vs ~270ms cold search)
 - Full corpus indexed search (33K+ documents, O(log n) lookup)
 
-**Executor Strategy**:
-- _process_pool (2 workers): BM25 tokenization, scoring, Arabic NLP (CPU-heavy)
-- _thread_pool (4 workers): Vector search, DB queries, translations (I/O-bound)
+Note: ProcessPoolExecutor was removed due to pickle issues with function references.
+ThreadPoolExecutor provides sufficient performance with proper caching.
 
-This architecture ensures:
-- No GIL contention during BM25 scoring (true parallelism via processes)
-- Non-blocking event loop for HTTP keep-alives and async tasks
-- 2-3x faster BM25 search compared to ThreadPoolExecutor
-- 100x faster for cache hits on common queries
+**Executor Strategy**:
+- _thread_pool (4 workers): All async operations (BM25, vector search, DB queries)
 
 Production Standards:
 - No local HuggingFace/torch model loading
@@ -46,9 +41,8 @@ import json
 import logging
 import re
 import time
-from functools import lru_cache
 from typing import List, Optional, Dict, Any, Tuple
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from langsmith import traceable
@@ -417,17 +411,17 @@ _chroma_client = None
 _bm25_retriever = None
 _corpus_documents = None
 
-# Thread pool for I/O-bound operations (ChromaDB queries, HTTP calls)
+# Thread pool for I/O-bound and CPU-bound operations
+# Note: ProcessPoolExecutor was removed due to pickle issues with function references
 _thread_pool = ThreadPoolExecutor(max_workers=4)
-
-# Process pool for CPU-bound operations (BM25 scoring, tokenization)
-# Fewer workers because processes have higher overhead than threads
-# Each process will load its own copy of the BM25 index (memory trade-off)
-_process_pool = ProcessPoolExecutor(max_workers=2)
 
 
 # Collection cache for multiple collections
 _chroma_collections = {}
+
+# BM25 search cache for performance optimization
+_bm25_cache: Dict[Tuple[Tuple[str, ...], str, int], Dict[str, float]] = {}
+_bm25_cache_max_size = 1000
 
 # Valid collection names
 VALID_COLLECTIONS = {"hadith_bukhari", "hadith_muslim"}
@@ -1514,10 +1508,10 @@ async def crosslingual_hybrid_search(
         if arabic_keywords:
             logger.info(f"BM25 Arabic keywords: {arabic_keywords}")
             
-            # Use ProcessPoolExecutor for GIL-free CPU-bound work
+            # Use ThreadPoolExecutor (ProcessPool has pickle issues with function refs)
             bm25_scores = await loop.run_in_executor(
-                _process_pool,  # ProcessPool instead of ThreadPool
-                _bm25_keyword_search_with_cache,  # Cached wrapper
+                _thread_pool,  # ThreadPool avoids pickle errors
+                _bm25_keyword_search_with_cache,
                 arabic_keywords,
                 'arabic',
                 fetch_k,
@@ -1535,10 +1529,10 @@ async def crosslingual_hybrid_search(
         if english_keywords:
             logger.info(f"BM25 English keywords: {english_keywords}")
             
-            # Use ProcessPoolExecutor for GIL-free CPU-bound work
+            # Use ThreadPoolExecutor (ProcessPool has pickle issues with function refs)
             bm25_scores = await loop.run_in_executor(
-                _process_pool,  # ProcessPool instead of ThreadPool
-                _bm25_keyword_search_with_cache,  # Cached wrapper
+                _thread_pool,  # ThreadPool avoids pickle errors
+                _bm25_keyword_search_with_cache,
                 english_keywords,
                 'english',
                 fetch_k,
@@ -1886,56 +1880,51 @@ def _bm25_keyword_search_raw(
         return {}
 
 
-@lru_cache(maxsize=1000)
-def _bm25_keyword_search_cached(
-    keywords_tuple: Tuple[str, ...],
-    language: str = 'arabic',
-    limit: int = 50,
-) -> Tuple[Tuple[str, float], ...]:
-    """
-    Cached wrapper for BM25 keyword search.
-    
-    LRU cache dramatically improves performance for repeated queries:
-    - Cache hits: ~1ms (skip all CPU work)
-    - Cache misses: ~100-270ms (full BM25 search)
-    
-    Common queries like "prayer", "patience", "charity" benefit most.
-    
-    Args:
-        keywords_tuple: Tuple of keywords (must be hashable for cache)
-        language: Language filter
-        limit: Max results
-        
-    Returns:
-        Tuple of (chunk_id, score) pairs for pickling/caching
-    """
-    # Convert tuple back to list for the underlying function
-    keywords_list = list(keywords_tuple)
-    results = _bm25_keyword_search_raw(keywords_list, language, limit)
-    
-    # Convert dict to tuple of tuples for caching (must be hashable/immutable)
-    return tuple(results.items())
-
-
 def _bm25_keyword_search_with_cache(
     keywords: List[str],
     language: str = 'arabic',
     limit: int = 50,
 ) -> Dict[str, float]:
     """
-    Public interface for cached BM25 search.
+    Cached BM25 keyword search compatible with ProcessPoolExecutor.
     
-    Handles conversion between list/dict (user-friendly) and
-    tuple (cache-friendly) representations.
+    Manual cache implementation (not @lru_cache) because:
+    - @lru_cache creates unpickleable wrappers
+    - ProcessPoolExecutor requires pickleable functions
+    - Manual dict cache is pickleable and process-safe
+    
+    Cache dramatically improves performance for repeated queries:
+    - Cache hits: ~1ms (skip all CPU work)
+    - Cache misses: ~100-270ms (full BM25 search)
+    
+    Common queries like "prayer", "patience", "charity" benefit most.
+    
+    Args:
+        keywords: List of keywords to search
+        language: Language filter
+        limit: Max results
+        
+    Returns:
+        Dict of {chunk_id: score}
     """
-    # Convert to tuple for caching
-    keywords_tuple = tuple(sorted(keywords))  # Sort for cache consistency
+    # Create cache key (must be hashable)
+    cache_key = (tuple(sorted(keywords)), language, limit)
     
-    # Call cached function
-    cached_results = _bm25_keyword_search_cached(keywords_tuple, language, limit)
+    # Check cache
+    if cache_key in _bm25_cache:
+        return _bm25_cache[cache_key].copy()  # Return copy to prevent mutation
     
-    # Convert back to dict
-    return dict(cached_results)
+    # Cache miss - perform search
+    results = _bm25_keyword_search_raw(keywords, language, limit)
+    
+    # Store in cache (with size limit)
+    if len(_bm25_cache) >= _bm25_cache_max_size:
+        # Simple FIFO eviction - remove oldest entry
+        _bm25_cache.pop(next(iter(_bm25_cache)))
+    
+    _bm25_cache[cache_key] = results.copy()
+    
+    return results
 
 
 def _vector_search_raw(
@@ -2140,22 +2129,20 @@ def cleanup_executors():
     Cleanup executor resources.
     
     Call this on application shutdown to properly close:
-    - ThreadPoolExecutor (for I/O-bound operations)
-    - ProcessPoolExecutor (for CPU-bound BM25 operations)
+    - ThreadPoolExecutor (for all async operations)
+    - BM25 search cache
     
     This ensures all background workers terminate gracefully.
     """
-    global _thread_pool, _process_pool
+    global _thread_pool, _bm25_cache
     
     if _thread_pool:
         logger.info("Shutting down thread pool executor...")
         _thread_pool.shutdown(wait=True)
         _thread_pool = None
     
-    if _process_pool:
-        logger.info("Shutting down process pool executor...")
-        _process_pool.shutdown(wait=True)
-        _process_pool = None
+    # Clear cache
+    _bm25_cache.clear()
     
     logger.info("All executors cleaned up successfully")
 

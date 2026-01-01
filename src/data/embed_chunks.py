@@ -33,6 +33,8 @@ import chromadb
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+from src.config.settings import MAX_RETRIES
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -52,7 +54,6 @@ CHUNK_FILES = {
     'muslim': project_root / "data" / "chunks" / "muslim_chunks.jsonl"
 }
 BATCH_SIZE = 50  # Number of chunks to embed per API call
-MAX_RETRIES = 3
 RETRY_DELAY = 2
 
 

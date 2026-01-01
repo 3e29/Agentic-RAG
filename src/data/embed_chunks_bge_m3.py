@@ -46,6 +46,8 @@ import chromadb
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+from src.config.settings import MAX_RETRIES
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -76,7 +78,6 @@ SOURCE_FILES = {
 }
 
 BATCH_SIZE = 50
-MAX_RETRIES = 3
 RETRY_DELAY = 2
 
 

@@ -29,6 +29,7 @@ import logging
 from typing import List, Optional, Dict, Any, Tuple
 import httpx
 from langsmith import traceable
+from src.config.settings import MAX_RETRIES
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -39,7 +40,6 @@ MULTI_ENDPOINT = "https://alaapocket3--bge-m3-embeddings-embed-multi-endpoint.mo
 
 # Request configuration
 DEFAULT_TIMEOUT = 120.0  # seconds (larger batches may take longer)
-MAX_RETRIES = 3
 RETRY_BACKOFF = 2.0  # exponential backoff multiplier
 
 # Embedding dimension (BAAI/bge-m3 - same as E5!)
