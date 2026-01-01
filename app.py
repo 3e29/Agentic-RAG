@@ -19,7 +19,7 @@ sys.path.insert(0, ".")
 
 import streamlit as st
 import time
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from langsmith import traceable
 
 # Import agents
@@ -34,16 +34,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# Sidebar Status
-with st.sidebar:
-    st.header("System Status")
-    if os.getenv("LANGCHAIN_TRACING_V2") == "true":
-        st.success("✅ LangSmith Tracing Active")
-        project = os.getenv("LANGCHAIN_PROJECT", "default")
-        st.caption(f"Project: {project}")
-    else:
-        st.warning("⚠️ LangSmith Tracing Inactive")
-        st.caption("Check .env file")
 
 # Custom CSS
 st.markdown("""
@@ -81,6 +71,229 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+
+def build_execution_graph(results: Dict[str, Any]) -> str:
+    """
+    Build a Graphviz DOT string based on the execution flow.
+    
+    Args:
+        results: Pipeline results containing analysis and metadata
+        
+    Returns:
+        DOT format string for graphviz rendering
+    """
+    # Extract execution info
+    analysis = results.get("analysis", {})
+    metadata = results.get("metadata", {})
+    retrieval_meta = metadata.get("retrieval", {})
+    
+    query_intent = analysis.get("intent", "unknown")
+    stages = retrieval_meta.get("stages", [])
+    iterations = retrieval_meta.get("agent_iterations", [])
+    
+    # Node styles
+    executed_style = 'style="filled" fillcolor="#90EE90" color="#228B22"'  # Green
+    skipped_style = 'style="filled" fillcolor="#D3D3D3" color="#808080"'   # Gray
+    current_style = 'style="filled" fillcolor="#FFD700" color="#FF8C00"'   # Gold
+    
+    # Build DOT graph
+    dot = '''
+    digraph LangGraph {
+        rankdir=TB;
+        node [shape=box, fontname="Arial", fontsize=10];
+        edge [fontname="Arial", fontsize=9];
+        
+        // Start node
+        start [label="🚀 Start" shape=circle style="filled" fillcolor="#4169E1" fontcolor="white"];
+        
+        // Query Analysis Stage
+        subgraph cluster_analysis {
+            label="Query Analysis Agent";
+            style=rounded;
+            bgcolor="#E6F3FF";
+            
+            qa_input [label="Input Query" ''' + executed_style + '''];
+            qa_intent [label="Intent Detection\\n(''' + query_intent + ''')" ''' + executed_style + '''];
+            qa_lang [label="Language Detection" ''' + executed_style + '''];
+            qa_correct [label="Query Correction" ''' + executed_style + '''];
+            qa_decompose [label="Query Decomposition" ''' + executed_style + '''];
+        }
+        
+        // Retrieval Stage
+        subgraph cluster_retrieval {
+            label="Retrieval Agent";
+            style=rounded;
+            bgcolor="#FFF3E6";
+    '''
+    
+    # Determine which retrieval path was taken
+    is_metadata_query = "metadata_query" in stages
+    is_user_text = "user_text_processing" in stages
+    is_autonomous = not is_metadata_query and not is_user_text
+    
+    # Metadata query path
+    if is_metadata_query:
+        dot += '''
+            ret_router [label="Intent Router" ''' + executed_style + '''];
+            ret_metadata [label="📊 Metadata Query\\n(longest/shortest)" ''' + executed_style + '''];
+            ret_extract [label="Extract Filters\\n(narrator, chapter)" ''' + executed_style + '''];
+            ret_resolve [label="Resolve Chapter ID" ''' + executed_style + '''];
+            ret_repo [label="Repository Query" ''' + executed_style + '''];
+        '''
+    elif is_user_text:
+        dot += '''
+            ret_router [label="Intent Router" ''' + executed_style + '''];
+            ret_user [label="👤 User Text\\nProcessor" ''' + executed_style + '''];
+            ret_similarity [label="Find Similar\\nHadiths" ''' + executed_style + '''];
+        '''
+    else:
+        # Autonomous search - show iterations
+        dot += '''
+            ret_router [label="Intent Router" ''' + executed_style + '''];
+            ret_orchestrator [label="🎯 Search\\nOrchestrator" ''' + executed_style + '''];
+        '''
+        
+        # Add iteration nodes based on actual execution
+        if iterations:
+            for i, iteration in enumerate(iterations[:5]):  # Limit to 5 iterations
+                action = iteration.get("action", "unknown")
+                action_labels = {
+                    "expand_query": "🔄 Expand Query",
+                    "extract_filters": "🏷️ Extract Filters",
+                    "find_chapter": "📖 Find Chapter",
+                    "keyword_search": "🔤 Keyword Search",
+                    "semantic_search": "🧠 Semantic Search",
+                    "hybrid_search": "⚡ Hybrid Search",
+                    "relax_filters": "🔓 Relax Filters",
+                    "finish": "✅ Finish",
+                }
+                label = action_labels.get(action, action)
+                dot += f'''
+            iter_{i} [label="{label}" {executed_style}];
+                '''
+        else:
+            # Default autonomous flow
+            dot += '''
+            ret_hybrid [label="⚡ Hybrid Search" ''' + executed_style + '''];
+            '''
+    
+    # Aggregation and output
+    dot += '''
+            ret_aggregate [label="📦 Aggregate\\n& Rerank" ''' + executed_style + '''];
+            ret_reassemble [label="🔧 Reassemble\\nChunks" ''' + executed_style + '''];
+        }
+        
+        // End node
+        end [label="📚 Results" shape=circle style="filled" fillcolor="#228B22" fontcolor="white"];
+        
+        // Edges - Analysis flow
+        start -> qa_input;
+        qa_input -> qa_intent;
+        qa_intent -> qa_lang;
+        qa_lang -> qa_correct;
+        qa_correct -> qa_decompose;
+        qa_decompose -> ret_router;
+    '''
+    
+    # Edges - Retrieval flow based on path
+    if is_metadata_query:
+        dot += '''
+        ret_router -> ret_metadata [label="metadata_query"];
+        ret_metadata -> ret_extract;
+        ret_extract -> ret_resolve;
+        ret_resolve -> ret_repo;
+        ret_repo -> ret_aggregate;
+        '''
+    elif is_user_text:
+        dot += '''
+        ret_router -> ret_user [label="user_text"];
+        ret_user -> ret_similarity;
+        ret_similarity -> ret_aggregate;
+        '''
+    else:
+        dot += '''
+        ret_router -> ret_orchestrator [label="autonomous"];
+        '''
+        if iterations:
+            # Chain iterations
+            dot += f'ret_orchestrator -> iter_0;\n'
+            for i in range(len(iterations[:5]) - 1):
+                dot += f'        iter_{i} -> iter_{i+1};\n'
+            dot += f'        iter_{len(iterations[:5])-1} -> ret_aggregate;\n'
+        else:
+            dot += '''
+        ret_orchestrator -> ret_hybrid;
+        ret_hybrid -> ret_aggregate;
+            '''
+    
+    dot += '''
+        ret_aggregate -> ret_reassemble;
+        ret_reassemble -> end;
+    }
+    '''
+    
+    return dot
+
+
+def render_sidebar_graph(results: Optional[Dict[str, Any]] = None):
+    """Render the execution graph in the sidebar."""
+    st.sidebar.title("🔄 Execution Flow")
+    
+    if results is None:
+        # Show default/idle graph
+        default_dot = '''
+        digraph LangGraph {
+            rankdir=TB;
+            node [shape=box, fontname="Arial", fontsize=10];
+            
+            start [label="🚀 Start" shape=circle style="filled" fillcolor="#4169E1" fontcolor="white"];
+            qa [label="Query Analysis\\nAgent" style="filled" fillcolor="#E6F3FF"];
+            ret [label="Retrieval\\nAgent" style="filled" fillcolor="#FFF3E6"];
+            end [label="📚 Results" shape=circle style="filled" fillcolor="#D3D3D3"];
+            
+            start -> qa [label="query"];
+            qa -> ret [label="state"];
+            ret -> end [label="docs"];
+            
+            note [label="Enter a query to see\\nthe execution flow" shape=note style="filled" fillcolor="#FFFACD"];
+        }
+        '''
+        st.sidebar.graphviz_chart(default_dot)
+        
+        # Legend
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("**Legend:**")
+        st.sidebar.markdown("🟢 Executed node")
+        st.sidebar.markdown("⚪ Skipped node")
+        st.sidebar.markdown("🟡 Current node")
+    else:
+        # Build and render execution graph
+        dot = build_execution_graph(results)
+        st.sidebar.graphviz_chart(dot)
+        
+        # Show execution stats
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("**Execution Stats:**")
+        
+        metadata = results.get("metadata", {})
+        retrieval_meta = metadata.get("retrieval", {})
+        
+        stages = retrieval_meta.get("stages", [])
+        iterations = retrieval_meta.get("agent_iterations", [])
+        
+        st.sidebar.metric("Stages", len(stages))
+        st.sidebar.metric("Agent Iterations", len(iterations))
+        
+        if results.get("timings"):
+            total_time = sum(results["timings"].values()) * 1000
+            st.sidebar.metric("Total Time", f"{total_time:.0f}ms")
+        
+        # Show stages list
+        if stages:
+            st.sidebar.markdown("**Stages Executed:**")
+            for stage in stages:
+                st.sidebar.markdown(f"• {stage}")
 
 
 @traceable(name="full_pipeline_run")
@@ -204,30 +417,18 @@ def main():
     st.title("📚 Hadith RAG System")
     st.caption("Test the full pipeline: Query Analysis → Retrieval")
     
-    # Sidebar with info
-    with st.sidebar:
-        st.header("ℹ️ About")
-        st.write("""
-        This UI tests the complete Hadith RAG pipeline:
-        
-        1. **Query Analysis Agent**
-           - Input source detection
-           - Typo correction
-           - Intent classification
-           - Collection targeting
-           - Query decomposition
-        
-        2. **Retrieval Agent**
-           - Autonomous ReAct search
-           - Hybrid search (semantic + BM25)
-           - Cross-encoder reranking
-           - Chunk reassembly
-        """)
-        
-        st.divider()
-        st.header("🔧 Settings")
-        show_metadata = st.checkbox("Show retrieval metadata", value=False)
-        show_timings = st.checkbox("Show timing details", value=True)
+    # Initialize session state for results
+    if "pipeline_results" not in st.session_state:
+        st.session_state.pipeline_results = None
+    
+    # Render sidebar graph (updates based on results)
+    render_sidebar_graph(st.session_state.pipeline_results)
+    
+    # Sidebar options
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Options:**")
+    show_timings = st.sidebar.checkbox("Show Timings", value=True)
+    show_metadata = st.sidebar.checkbox("Show Metadata", value=False)
     
     # Main query input
     query = st.text_input(
@@ -259,43 +460,53 @@ def main():
             with st.spinner("Processing query..."):
                 results = run_pipeline(query)
             
-            # Display Analysis Results
-            st.markdown('<div class="stage-header">📊 Stage 1: Query Analysis</div>', unsafe_allow_html=True)
-            if results["analysis"]:
-                display_analysis(results["analysis"])
+            # Store results for sidebar graph
+            st.session_state.pipeline_results = results
             
-            # Display Retrieval Results
-            st.markdown('<div class="stage-header">📚 Stage 2: Retrieval Results</div>', unsafe_allow_html=True)
-            
-            documents = results.get("documents", [])
-            
-            if not documents:
-                st.warning("No documents found for this query.")
-            else:
-                st.success(f"Found {len(documents)} relevant hadith(s)")
-                
-                for i, doc in enumerate(documents, 1):
-                    display_document(doc, i)
-            
-            # Timing info
-            if show_timings and results.get("timings"):
-                st.divider()
-                timing_cols = st.columns(3)
-                timings = results["timings"]
-                with timing_cols[0]:
-                    st.metric("Analysis Time", f"{timings.get('analysis', 0)*1000:.0f}ms")
-                with timing_cols[1]:
-                    st.metric("Retrieval Time", f"{timings.get('retrieval', 0)*1000:.0f}ms")
-                with timing_cols[2]:
-                    total = sum(timings.values())
-                    st.metric("Total Time", f"{total*1000:.0f}ms")
-            
-            # Metadata (optional)
-            if show_metadata and results.get("metadata"):
-                with st.expander("🔧 Retrieval Metadata"):
-                    st.json(results["metadata"])
+            # Force rerun to update sidebar graph
+            st.rerun()
+    
+    # Display results if available
+    if st.session_state.pipeline_results and st.session_state.get("last_query"):
+        results = st.session_state.pipeline_results
+        
+        # Display Analysis Results
+        st.markdown('<div class="stage-header">📊 Stage 1: Query Analysis</div>', unsafe_allow_html=True)
+        if results["analysis"]:
+            display_analysis(results["analysis"])
+        
+        # Display Retrieval Results
+        st.markdown('<div class="stage-header">📚 Stage 2: Retrieval Results</div>', unsafe_allow_html=True)
+        
+        documents = results.get("documents", [])
+        
+        if not documents:
+            st.warning("No documents found for this query.")
         else:
-            st.info("Please enter a query to search.")
+            st.success(f"Found {len(documents)} relevant hadith(s)")
+            
+            for i, doc in enumerate(documents, 1):
+                display_document(doc, i)
+        
+        # Timing info
+        if show_timings and results.get("timings"):
+            st.divider()
+            timing_cols = st.columns(3)
+            timings = results["timings"]
+            with timing_cols[0]:
+                st.metric("Analysis Time", f"{timings.get('analysis', 0)*1000:.0f}ms")
+            with timing_cols[1]:
+                st.metric("Retrieval Time", f"{timings.get('retrieval', 0)*1000:.0f}ms")
+            with timing_cols[2]:
+                total = sum(timings.values())
+                st.metric("Total Time", f"{total*1000:.0f}ms")
+        
+        # Metadata (optional)
+        if show_metadata and results.get("metadata"):
+            with st.expander("🔧 Retrieval Metadata"):
+                st.json(results["metadata"])
+    elif not st.session_state.get("last_query"):
+        st.info("Please enter a query to search.")
 
 
 if __name__ == "__main__":

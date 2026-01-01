@@ -199,6 +199,7 @@ def _autonomous_search(
     metadata["query_language"] = query_language
     metadata["desired_output_language"] = desired_output_language
     metadata["query_intent"] = query_intent
+    metadata["stages"].append("autonomous_search")
     
     logger.info(
         f"Processing {len(sub_queries)} sub-queries via orchestrator "
@@ -746,7 +747,7 @@ def _handle_metadata_query(
     target_collections = state.get("target_collections") or ["bukhari", "muslim"]
     desired_language = state.get("desired_output_language")
     
-    # Determine query type from the query text
+    # 1. Determine query type (Longest vs Shortest)
     query_lower = query.lower()
     is_longest = any(term in query_lower for term in ['أطول', 'اطول', 'longest', 'long'])
     is_shortest = any(term in query_lower for term in ['أقصر', 'اقصر', 'shortest', 'short'])
@@ -758,42 +759,53 @@ def _handle_metadata_query(
         metadata["stages"].append("metadata_fallback_to_search")
         return _autonomous_search(query, state, metadata)
     
-    # Common mappings for metadata matching (Arabic Query -> English DB Metadata)
-    NARRATOR_MAPPING = {
-        "أبو هريرة": "Abu Huraira",
-        "ابو هريرة": "Abu Huraira",
-        "عائشة": "Aisha",
-        "عائشه": "Aisha",
-        "أنس": "Anas",
-        "أنس بن مالك": "Anas",
-        "ابن عمر": "Ibn Umar",
-        "عبد الله بن عمر": "Ibn Umar",
-        "جابر": "Jabir",
-        "أبو سعيد": "Abu Said",
-        "ابن عباس": "Ibn Abbas",
-        "عبد الله بن عباس": "Ibn Abbas",
-        "ابن مسعود": "Ibn Masud",
-        "عبد الله بن مسعود": "Ibn Masud",
-    }
-    
-    # Extract narrator from the query using the existing extraction tool
+    # 2. Extract Filters & Resolve IDs
     narrator = None
+    chapter_id = None
+    
     try:
-        # Try regex first
-        extracted = extract_metadata_filters(query, use_llm=False)
-        if extracted.narrator:
-            narrator = extracted.narrator
+        # Extract raw metadata using LLM
+        metadata["stages"].append("extract_filters")
+        extracted = extract_metadata_filters(query, use_llm=True)
+        narrator = extracted.narrator
+        chapter_id = extracted.chapter_id
         
-        # If regex failed OR gave us Arabic text not in our map, try LLM for better normalization
-        is_arabic_narrator = narrator and any('\u0600' <= c <= '\u06FF' for c in narrator)
+        # --- Resolve Chapter Title to ID if ID is missing ---
+        if not chapter_id and (extracted.chapter_title_en or extracted.chapter_title_ar):
+            metadata["stages"].append("resolve_chapter_id")
+            # Use Arabic title if available (often more precise), otherwise English
+            search_title = extracted.chapter_title_ar or extracted.chapter_title_en
+            collection_scope = extracted.collection or (target_collections[0] if len(target_collections) == 1 else None)
+            
+            logger.info(f"Resolving chapter title '{search_title}' to ID (scope: {collection_scope})...")
+            
+            # Lookup the ID using find_chapter_for_subject
+            chapter_result = find_chapter_for_subject(search_title, collection_scope)
+            
+            if chapter_result:
+                chapter_id = chapter_result.chapter_id
+                logger.info(f"Resolved '{search_title}' -> chapter_id={chapter_id}")
+            else:
+                logger.warning(f"Could not resolve chapter title '{search_title}' to an ID")
         
-        if not narrator or (is_arabic_narrator and narrator not in NARRATOR_MAPPING):
-            logger.info("Using LLM to extract/normalize narrator for metadata query")
-            extracted_llm = extract_metadata_filters(query, use_llm=True)
-            if extracted_llm.narrator:
-                narrator = extracted_llm.narrator
+        # --- Narrator Normalization (Arabic -> English) ---
+        NARRATOR_MAPPING = {
+            "أبو هريرة": "Abu Huraira",
+            "ابو هريرة": "Abu Huraira",
+            "عائشة": "Aisha",
+            "عائشه": "Aisha",
+            "أنس": "Anas",
+            "أنس بن مالك": "Anas",
+            "ابن عمر": "Ibn Umar",
+            "عبد الله بن عمر": "Ibn Umar",
+            "جابر": "Jabir",
+            "أبو سعيد": "Abu Said",
+            "ابن عباس": "Ibn Abbas",
+            "عبد الله بن عباس": "Ibn Abbas",
+            "ابن مسعود": "Ibn Masud",
+            "عبد الله بن مسعود": "Ibn Masud",
+        }
         
-        # Normalize Arabic Narrator to English (Database Format)
         if narrator and narrator in NARRATOR_MAPPING:
             original_narrator = narrator
             narrator = NARRATOR_MAPPING[narrator]
@@ -801,10 +813,14 @@ def _handle_metadata_query(
         
         if narrator:
             logger.info(f"Metadata query applying narrator filter: {narrator}")
+        if chapter_id:
+            logger.info(f"Metadata query applying chapter_id filter: {chapter_id}")
+            
     except Exception as e:
-        logger.warning(f"Failed to extract narrator for metadata query: {e}")
+        logger.warning(f"Failed to extract/resolve filters for metadata query: {e}")
     
-    # Use the repository for data access
+    # 3. Execute Repository Query
+    metadata["stages"].append("repository_query")
     repo = repository or get_hadith_repository()
     
     try:
@@ -816,12 +832,14 @@ def _handle_metadata_query(
                     collection=coll_name,
                     language=desired_language,
                     narrator=narrator,
+                    chapter_id=chapter_id,
                 )
             else:
                 doc = repo.get_shortest_hadith(
                     collection=coll_name,
                     language=desired_language,
                     narrator=narrator,
+                    chapter_id=chapter_id,
                 )
             
             if doc:
@@ -832,6 +850,7 @@ def _handle_metadata_query(
                     "hadith_id": doc.hadith_id,
                     "total_chunks": doc.total_chunks,
                     "collection": coll_name,
+                    "chapter_id": chapter_id,
                 }
                 
                 logger.info(

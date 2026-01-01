@@ -362,6 +362,7 @@ class HadithRepository:
         collection: str = "bukhari",
         language: Optional[str] = None,
         narrator: Optional[str] = None,
+        chapter_id: Optional[int] = None,
     ) -> Optional[Document]:
         """
         Find the longest hadith in a collection by total_chunks and text length.
@@ -370,6 +371,7 @@ class HadithRepository:
             collection: Collection name (bukhari/muslim)
             language: Optional language filter
             narrator: Optional narrator filter (partial match)
+            chapter_id: Optional chapter ID filter
             
         Returns:
             Document with the longest hadith, or None if not found
@@ -379,6 +381,7 @@ class HadithRepository:
             language=language,
             find_longest=True,
             narrator=narrator,
+            chapter_id=chapter_id,
         )
     
     def get_shortest_hadith(
@@ -386,6 +389,7 @@ class HadithRepository:
         collection: str = "bukhari",
         language: Optional[str] = None,
         narrator: Optional[str] = None,
+        chapter_id: Optional[int] = None,
     ) -> Optional[Document]:
         """
         Find the shortest hadith in a collection by text length.
@@ -394,6 +398,7 @@ class HadithRepository:
             collection: Collection name (bukhari/muslim)
             language: Optional language filter
             narrator: Optional narrator filter (partial match)
+            chapter_id: Optional chapter ID filter
             
         Returns:
             Document with the shortest hadith, or None if not found
@@ -403,6 +408,7 @@ class HadithRepository:
             language=language,
             find_longest=False,
             narrator=narrator,
+            chapter_id=chapter_id,
         )
     
     def _get_hadith_by_length(
@@ -411,6 +417,7 @@ class HadithRepository:
         language: Optional[str],
         find_longest: bool,
         narrator: Optional[str] = None,
+        chapter_id: Optional[int] = None,
     ) -> Optional[Document]:
         """
         Internal method to find hadith by length criteria.
@@ -420,6 +427,7 @@ class HadithRepository:
             language: Optional language filter
             find_longest: True for longest, False for shortest
             narrator: Optional narrator filter (partial match)
+            chapter_id: Optional chapter ID filter
             
         Returns:
             Document or None
@@ -454,6 +462,7 @@ class HadithRepository:
                 total_chunks = meta.get('total_chunks', 1)
                 lang = meta.get('language', 'arabic')
                 doc_narrator = meta.get('narrator', '')
+                doc_chapter_id = meta.get('chapter_id')
                 
                 # 1. Filter by language if specified
                 if language:
@@ -480,7 +489,11 @@ class HadithRepository:
                     if not is_match:
                         continue
                 
-                # 3. Filter out "Noise" when looking for shortest hadith
+                # 3. Filter by Chapter ID (if specified)
+                if chapter_id is not None and doc_chapter_id != chapter_id:
+                    continue
+                
+                # 4. Filter out "Noise" when looking for shortest hadith
                 # If text is very short (< 100 chars) AND contains reference keywords, skip it
                 if not find_longest and text and len(text) < 100:
                     if any(kw in text for kw in NOISE_KEYWORDS):
