@@ -98,7 +98,7 @@ from src.config.settings import (
 # ============================================================================
 
 @traceable(name="retrieval_agent", run_type="chain")
-def retrieval_agent(state: AgentState) -> Dict[str, Any]:
+def retrieval_agent(state: AgentState, **kwargs) -> Dict[str, Any]:
     """
     Retrieval Agent node for LangGraph workflow.
     
@@ -118,6 +118,7 @@ def retrieval_agent(state: AgentState) -> Dict[str, Any]:
     
     Args:
         state: Current AgentState with query analysis results
+        **kwargs: Additional arguments from LangGraph (e.g., config)
         
     Returns:
         Dictionary with 'retrieved_docs' and updated 'metadata'
@@ -252,7 +253,7 @@ def _execute_search_strategy(
     old ReAct loop. Each strategy runs ONCE per invocation.
     
     Args:
-        query: The search query
+        query: The search query (already optimized for embedding)
         state: Current agent state
         metadata: Metadata dict to update
         strategy: Strategy to execute
@@ -263,10 +264,27 @@ def _execute_search_strategy(
     target_collections = state.get("target_collections") or ["bukhari", "muslim"]
     desired_output_language = state.get("desired_output_language")
     query_intent = state.get("query_intent", "thematic_search")
-    sub_queries = state.get("sub_queries") or [query]
+    
+    # Use search_sub_queries (optimized for embedding) if available, otherwise fall back to sub_queries
+    # If neither exists, use the main query
+    search_sub_queries = state.get("search_sub_queries")
+    sub_queries = state.get("sub_queries")
+    
+    if search_sub_queries:
+        # Use optimized sub-queries for embedding search
+        queries_to_search = search_sub_queries
+        logger.info(f"Using {len(queries_to_search)} search_sub_queries for retrieval: {queries_to_search}")
+    elif sub_queries:
+        # Fall back to original sub-queries
+        queries_to_search = sub_queries
+        logger.info(f"Using {len(queries_to_search)} sub_queries for retrieval")
+    else:
+        # Single query
+        queries_to_search = [query]
     
     metadata["stages"].append(f"strategy_{strategy}")
     metadata["target_collections"] = target_collections
+    metadata["queries_searched"] = queries_to_search  # Track what was actually searched
     
     # Build initial filters
     filters = MetadataFilter()
@@ -277,22 +295,74 @@ def _execute_search_strategy(
     
     # Execute based on strategy
     if strategy == "expand_query":
-        return _strategy_expand_and_search(query, sub_queries, filters, metadata)
+        return _strategy_expand_and_search(query, queries_to_search, filters, metadata)
     
     elif strategy == "keyword_search":
-        return _strategy_keyword_search(query, sub_queries, filters, metadata)
+        return _strategy_keyword_search(query, queries_to_search, filters, metadata)
     
     elif strategy == "semantic_search":
-        return _strategy_semantic_search(query, sub_queries, filters, metadata)
+        return _strategy_semantic_search(query, queries_to_search, filters, metadata)
     
     elif strategy == "relax_filters":
-        return _strategy_relax_and_search(query, sub_queries, filters, metadata)
+        return _strategy_relax_and_search(query, queries_to_search, filters, metadata)
     
     elif strategy == "find_chapter":
-        return _strategy_find_chapter_and_search(query, sub_queries, filters, target_collections, metadata)
+        return _strategy_find_chapter_and_search(query, queries_to_search, filters, target_collections, metadata)
     
     else:  # default - hybrid search
-        return _strategy_hybrid_search(query, sub_queries, filters, metadata)
+        return _strategy_hybrid_search(query, queries_to_search, filters, metadata)
+
+
+def _aggregate_compound_results(
+    sub_queries: List[str],
+    results_per_query: Dict[str, List[Document]],
+    metadata: Dict[str, Any],
+) -> List[Document]:
+    """
+    Aggregate results from multiple sub-queries ensuring each gets representation.
+    
+    For compound queries, we ensure each sub-query gets fair representation
+    in the final results, rather than having one dominant sub-query.
+    
+    Args:
+        sub_queries: List of sub-queries that were searched
+        results_per_query: Dict mapping each sub-query to its results
+        metadata: Metadata dict to update with aggregation info
+        
+    Returns:
+        Combined list of documents with fair representation per sub-query
+    """
+    if len(sub_queries) == 1:
+        return results_per_query.get(sub_queries[0], [])
+    
+    # Calculate how many results per sub-query (at least 5 each)
+    results_per_sub = max(5, DEFAULT_TOP_K // len(sub_queries))
+    
+    final_results = []
+    seen_ids = set()
+    
+    for sub_query in sub_queries:
+        docs = results_per_query.get(sub_query, [])[:results_per_sub]
+        
+        for doc in docs:
+            # Use Document model attributes directly (not LangChain's metadata dict)
+            doc_id = doc.hadith_id or doc.chunk_id or hash(doc.text[:100] if doc.text else str(id(doc)))
+            if doc_id not in seen_ids:
+                seen_ids.add(doc_id)
+                # Track which sub-query found this document (Document allows extra fields)
+                doc.source_sub_query = sub_query
+                final_results.append(doc)
+    
+    metadata["sub_query_results_count"] = {
+        "total": len(final_results),
+        "per_sub_query": results_per_sub,
+        "sub_queries_count": len(sub_queries),
+        "per_query_counts": {sq: len(results_per_query.get(sq, [])) for sq in sub_queries}
+    }
+    
+    logger.info(f"Compound query: {len(final_results)} total docs from {len(sub_queries)} sub-queries")
+    
+    return final_results
 
 
 @traceable(name="strategy_hybrid_search", run_type="chain")
@@ -302,23 +372,28 @@ def _strategy_hybrid_search(
     filters: MetadataFilter,
     metadata: Dict[str, Any],
 ) -> List[Document]:
-    """Default hybrid search strategy."""
+    """
+    Default hybrid search strategy.
+    
+    For compound queries (multiple sub-queries), we aggregate results PER sub-query
+    to ensure each part of the query gets representation in the final results.
+    """
     metadata["stages"].append("hybrid_search")
     
-    all_results = []
+    # Execute hybrid search per sub-query and aggregate
+    results_per_query = {}
+    
     for sub_query in sub_queries:
         results = _agent_hybrid_search(sub_query, filters, PARALLEL_SEARCH_K)
-        all_results.extend(results)
+        aggregated = aggregate_results(
+            raw_results=[results],
+            original_query=sub_query,
+            top_k=DEFAULT_TOP_K,
+            use_reranker=True,
+        )
+        results_per_query[sub_query] = aggregated.documents
     
-    # Aggregate and deduplicate
-    aggregated = aggregate_results(
-        raw_results=[all_results],
-        original_query=query,
-        top_k=DEFAULT_TOP_K,
-        use_reranker=True,
-    )
-    
-    return aggregated.documents
+    return _aggregate_compound_results(sub_queries, results_per_query, metadata)
 
 
 @traceable(name="strategy_expand_and_search", run_type="chain")
@@ -328,7 +403,7 @@ def _strategy_expand_and_search(
     filters: MetadataFilter,
     metadata: Dict[str, Any],
 ) -> List[Document]:
-    """Expand query terms, then hybrid search."""
+    """Expand query terms, then hybrid search with per-sub-query aggregation."""
     metadata["stages"].append("expand_query")
     
     # Expand the main query
@@ -341,24 +416,27 @@ def _strategy_expand_and_search(
     else:
         expanded_query = query
     
-    # Execute hybrid search with expanded query
+    # Execute hybrid search per sub-query and aggregate
     metadata["stages"].append("hybrid_search_expanded")
-    all_results = []
+    results_per_query = {}
     
     for sub_query in sub_queries:
-        # Use expanded version of main query
-        search_query = expanded_query if sub_query == query else sub_query
+        # Expand each sub-query with the expanded terms
+        if expanded_terms and sub_query != query:
+            search_query = ' '.join([sub_query] + expanded_terms[:2])
+        else:
+            search_query = expanded_query if sub_query == query else sub_query
+        
         results = _agent_hybrid_search(search_query, filters, PARALLEL_SEARCH_K)
-        all_results.extend(results)
+        aggregated = aggregate_results(
+            raw_results=[results],
+            original_query=sub_query,
+            top_k=DEFAULT_TOP_K,
+            use_reranker=True,
+        )
+        results_per_query[sub_query] = aggregated.documents
     
-    aggregated = aggregate_results(
-        raw_results=[all_results],
-        original_query=query,
-        top_k=DEFAULT_TOP_K,
-        use_reranker=True,
-    )
-    
-    return aggregated.documents
+    return _aggregate_compound_results(sub_queries, results_per_query, metadata)
 
 
 @traceable(name="strategy_keyword_search", run_type="chain")
@@ -368,22 +446,21 @@ def _strategy_keyword_search(
     filters: MetadataFilter,
     metadata: Dict[str, Any],
 ) -> List[Document]:
-    """Keyword-only (BM25) search strategy."""
+    """Keyword-only (BM25) search strategy with per-sub-query aggregation."""
     metadata["stages"].append("keyword_search")
     
-    all_results = []
+    results_per_query = {}
     for sub_query in sub_queries:
         results = _agent_keyword_search(sub_query, filters, PARALLEL_SEARCH_K)
-        all_results.extend(results)
+        aggregated = aggregate_results(
+            raw_results=[results],
+            original_query=sub_query,
+            top_k=DEFAULT_TOP_K,
+            use_reranker=True,
+        )
+        results_per_query[sub_query] = aggregated.documents
     
-    aggregated = aggregate_results(
-        raw_results=[all_results],
-        original_query=query,
-        top_k=DEFAULT_TOP_K,
-        use_reranker=True,
-    )
-    
-    return aggregated.documents
+    return _aggregate_compound_results(sub_queries, results_per_query, metadata)
 
 
 @traceable(name="strategy_semantic_search", run_type="chain")
@@ -393,22 +470,21 @@ def _strategy_semantic_search(
     filters: MetadataFilter,
     metadata: Dict[str, Any],
 ) -> List[Document]:
-    """Semantic-only (vector) search strategy."""
+    """Semantic-only (vector) search strategy with per-sub-query aggregation."""
     metadata["stages"].append("semantic_search")
     
-    all_results = []
+    results_per_query = {}
     for sub_query in sub_queries:
         results = _agent_semantic_search(sub_query, filters, PARALLEL_SEARCH_K)
-        all_results.extend(results)
+        aggregated = aggregate_results(
+            raw_results=[results],
+            original_query=sub_query,
+            top_k=DEFAULT_TOP_K,
+            use_reranker=True,
+        )
+        results_per_query[sub_query] = aggregated.documents
     
-    aggregated = aggregate_results(
-        raw_results=[all_results],
-        original_query=query,
-        top_k=DEFAULT_TOP_K,
-        use_reranker=True,
-    )
-    
-    return aggregated.documents
+    return _aggregate_compound_results(sub_queries, results_per_query, metadata)
 
 
 @traceable(name="strategy_relax_and_search", run_type="chain")
@@ -418,7 +494,7 @@ def _strategy_relax_and_search(
     filters: MetadataFilter,
     metadata: Dict[str, Any],
 ) -> List[Document]:
-    """Relax filters, then hybrid search."""
+    """Relax filters, then hybrid search with per-sub-query aggregation."""
     metadata["stages"].append("relax_filters")
     
     # Relax the filters
@@ -427,20 +503,19 @@ def _strategy_relax_and_search(
     
     # Execute hybrid search with relaxed filters
     metadata["stages"].append("hybrid_search_relaxed")
-    all_results = []
+    results_per_query = {}
     
     for sub_query in sub_queries:
         results = _agent_hybrid_search(sub_query, relaxed_filters, PARALLEL_SEARCH_K)
-        all_results.extend(results)
+        aggregated = aggregate_results(
+            raw_results=[results],
+            original_query=sub_query,
+            top_k=DEFAULT_TOP_K,
+            use_reranker=True,
+        )
+        results_per_query[sub_query] = aggregated.documents
     
-    aggregated = aggregate_results(
-        raw_results=[all_results],
-        original_query=query,
-        top_k=DEFAULT_TOP_K,
-        use_reranker=True,
-    )
-    
-    return aggregated.documents
+    return _aggregate_compound_results(sub_queries, results_per_query, metadata)
 
 
 @traceable(name="strategy_find_chapter_and_search", run_type="chain")
@@ -451,7 +526,7 @@ def _strategy_find_chapter_and_search(
     target_collections: List[str],
     metadata: Dict[str, Any],
 ) -> List[Document]:
-    """Find relevant chapter first, then search within it."""
+    """Find relevant chapter first, then search with per-sub-query aggregation."""
     metadata["stages"].append("find_chapter")
     
     # Find chapter
@@ -465,20 +540,19 @@ def _strategy_find_chapter_and_search(
     
     # Execute hybrid search with chapter filter
     metadata["stages"].append("hybrid_search_chapter")
-    all_results = []
+    results_per_query = {}
     
     for sub_query in sub_queries:
         results = _agent_hybrid_search(sub_query, filters, PARALLEL_SEARCH_K)
-        all_results.extend(results)
+        aggregated = aggregate_results(
+            raw_results=[results],
+            original_query=sub_query,
+            top_k=DEFAULT_TOP_K,
+            use_reranker=True,
+        )
+        results_per_query[sub_query] = aggregated.documents
     
-    aggregated = aggregate_results(
-        raw_results=[all_results],
-        original_query=query,
-        top_k=DEFAULT_TOP_K,
-        use_reranker=True,
-    )
-    
-    return aggregated.documents
+    return _aggregate_compound_results(sub_queries, results_per_query, metadata)
 
 
 # ============================================================================
@@ -667,15 +741,16 @@ def _handle_metadata_query(
     target_collections = state.get("target_collections") or ["bukhari", "muslim"]
     desired_language = state.get("desired_output_language")
     
-    # 1. Determine query type (Longest vs Shortest)
+    # 1. Determine query type (Longest vs Shortest vs Last vs First)
     query_lower = query.lower()
     is_longest = any(term in query_lower for term in ['أطول', 'اطول', 'longest', 'long'])
     is_shortest = any(term in query_lower for term in ['أقصر', 'اقصر', 'shortest', 'short'])
+    is_last = any(term in query_lower for term in ['أخر', 'آخر', 'الأخير', 'الاخير', 'last', 'final', 'end'])
+    is_first = any(term in query_lower for term in ['أول', 'الأول', 'الاول', 'first', 'beginning', 'start'])
     
-    # If neither longest nor shortest detected, this is NOT a metadata query
-    # Fall back to default search (e.g., "ما عدد الصلوات" is asking about content, not hadith stats)
-    if not is_longest and not is_shortest:
-        logger.info("Metadata query type not detected (not longest/shortest), falling back to default search")
+    # If none of the metadata query types detected, fall back to default search
+    if not is_longest and not is_shortest and not is_last and not is_first:
+        logger.info("Metadata query type not detected (not longest/shortest/last/first), falling back to default search")
         metadata["stages"].append("metadata_fallback_to_search")
         return _execute_search_strategy(query, state, metadata, "default")
     
@@ -747,26 +822,43 @@ def _handle_metadata_query(
         results = []
         
         for coll_name in target_collections:
+            doc = None
+            query_type = None
+            
             if is_longest:
+                query_type = "longest"
                 doc = repo.get_longest_hadith(
                     collection=coll_name,
                     language=desired_language,
                     narrator=narrator,
                     chapter_id=chapter_id,
                 )
-            else:
+            elif is_shortest:
+                query_type = "shortest"
                 doc = repo.get_shortest_hadith(
                     collection=coll_name,
                     language=desired_language,
                     narrator=narrator,
                     chapter_id=chapter_id,
                 )
+            elif is_last:
+                query_type = "last"
+                doc = repo.get_last_hadith(
+                    collection=coll_name,
+                    language=desired_language,
+                )
+            elif is_first:
+                query_type = "first"
+                doc = repo.get_first_hadith(
+                    collection=coll_name,
+                    language=desired_language,
+                )
             
             if doc:
                 results.append(doc)
                 
                 metadata["metadata_query_result"] = {
-                    "query_type": "longest" if is_longest else "shortest",
+                    "query_type": query_type,
                     "hadith_id": doc.hadith_id,
                     "total_chunks": doc.total_chunks,
                     "collection": coll_name,

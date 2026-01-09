@@ -411,6 +411,137 @@ class HadithRepository:
             chapter_id=chapter_id,
         )
     
+    def get_last_hadith(
+        self,
+        collection: str = "bukhari",
+        language: Optional[str] = None,
+    ) -> Optional[Document]:
+        """
+        Find the last hadith in a collection by maximum hadith_id.
+        
+        Args:
+            collection: Collection name (bukhari/muslim)
+            language: Optional language filter
+            
+        Returns:
+            Document with the last hadith, or None if not found
+        """
+        return self._get_hadith_by_position(
+            collection=collection,
+            language=language,
+            find_last=True,
+        )
+    
+    def get_first_hadith(
+        self,
+        collection: str = "bukhari",
+        language: Optional[str] = None,
+    ) -> Optional[Document]:
+        """
+        Find the first hadith in a collection by minimum hadith_id.
+        
+        Args:
+            collection: Collection name (bukhari/muslim)
+            language: Optional language filter
+            
+        Returns:
+            Document with the first hadith, or None if not found
+        """
+        return self._get_hadith_by_position(
+            collection=collection,
+            language=language,
+            find_last=False,
+        )
+    
+    def _get_hadith_by_position(
+        self,
+        collection: str,
+        language: Optional[str],
+        find_last: bool,
+    ) -> Optional[Document]:
+        """
+        Internal method to find hadith by position (first or last).
+        
+        Args:
+            collection: Collection name
+            language: Optional language filter
+            find_last: True for last (max ID), False for first (min ID)
+            
+        Returns:
+            Document or None
+        """
+        collection_db_name = self.normalize_collection_name(collection)
+        
+        try:
+            db_collection = self.get_collection(collection_db_name)
+            
+            # Fetch metadatas only to find min/max ID (more efficient)
+            result = db_collection.get(include=['metadatas'])
+            
+            if not result['ids']:
+                return None
+            
+            # Find the entry with min or max hadith_id
+            target_hadith_id = None
+            target_language = language or "arabic"  # Default to Arabic
+            
+            for meta in result['metadatas']:
+                # Filter by language if needed
+                doc_lang = meta.get('language', 'arabic')
+                if language and doc_lang != language:
+                    continue
+                
+                hid = meta.get('hadith_id')
+                if hid is None or not isinstance(hid, int):
+                    continue
+                
+                if target_hadith_id is None:
+                    target_hadith_id = hid
+                    target_language = doc_lang
+                elif find_last and hid > target_hadith_id:
+                    target_hadith_id = hid
+                    target_language = doc_lang
+                elif not find_last and hid < target_hadith_id:
+                    target_hadith_id = hid
+                    target_language = doc_lang
+            
+            if target_hadith_id is None:
+                return None
+            
+            logger.info(f"Found {'last' if find_last else 'first'} hadith: ID={target_hadith_id} in {collection}")
+            
+            # Fetch and reassemble the hadith chunks
+            chunks = self.get_chunks_by_hadith_id(collection_db_name, target_hadith_id, target_language)
+            
+            if not chunks:
+                return None
+            
+            # Sort chunks by chunk_index
+            chunks.sort(key=lambda c: c['metadata'].get('chunk_index', 0))
+            
+            # Combine all chunk texts
+            combined_text = "\n".join([chunk['text'] for chunk in chunks])
+            first_meta = chunks[0]['metadata']
+            
+            return Document(
+                chunk_id=chunks[0]['id'],
+                text=combined_text,
+                score=1.0,
+                search_type="metadata_lookup",
+                language=first_meta.get('language', 'arabic'),
+                collection=first_meta.get('collection', collection),
+                hadith_id=first_meta.get('hadith_id'),
+                chapter_id=first_meta.get('chapter_id'),
+                narrator=first_meta.get('narrator'),
+                hadith_id_in_book=first_meta.get('hadith_id_in_book'),
+                total_chunks=first_meta.get('total_chunks', 1),
+                is_chunked=first_meta.get('is_chunked', False),
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to get {'last' if find_last else 'first'} hadith from {collection}: {e}")
+            return None
+    
     def _get_hadith_by_length(
         self,
         collection: str,

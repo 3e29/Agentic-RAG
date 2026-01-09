@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 
 @traceable(name="query_analysis_agent")
-def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
+def query_analysis_agent(state: AgentState, **kwargs) -> Dict[str, Any]:
     """
     Main Query Analysis Agent node implementing a Smart Conditional Pipeline.
     
@@ -68,6 +68,7 @@ def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
     
     Args:
         state: Current AgentState containing 'original_query'
+        **kwargs: Additional arguments from LangGraph (e.g., config)
         
     Returns:
         Dictionary with updated state fields
@@ -256,13 +257,11 @@ def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
     skip_decomposition = False
     skip_reason = None
     
-    # Condition 1: Skip for specific_lookup intent
-    if query_intent == "specific_lookup":
-        skip_decomposition = True
-        skip_reason = "specific_lookup intent - targeted query doesn't benefit from decomposition"
-    
-    # Condition 2: Skip if input_source is not base_knowledge
-    elif input_source != "base_knowledge":
+    # Only skip decomposition for non-database queries
+    # NOTE: We NO LONGER skip for specific_lookup because compound queries like
+    # "من هو راوي حديث X وماهو حكم Y" should still be decomposed even if one
+    # part is a specific_lookup. The decomposition LLM will decide if it's complex.
+    if input_source != "base_knowledge":
         skip_decomposition = True
         skip_reason = f"input_source is '{input_source}' - not a database query"
     
@@ -279,6 +278,9 @@ def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
         }
         metadata["query_analysis"]["stages_skipped"].append("query_decomposition")
         
+        # No sub_queries when decomposition is skipped
+        search_sub_queries = None
+        
     else:
         # Run decomposition for thematic_search and comparative_analysis
         logger.info(f"Running decomposition (intent: {query_intent}, source: {input_source})")
@@ -288,15 +290,19 @@ def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
             
             if decomp_result.is_complex:
                 sub_queries = decomp_result.sub_queries
+                search_sub_queries = decomp_result.search_sub_queries  # Optimized for embedding
                 logger.info(f"Complex query decomposed into {len(sub_queries)} sub-queries")
+                logger.info(f"Search sub-queries (for embedding): {search_sub_queries}")
             else:
                 sub_queries = None
+                search_sub_queries = None
                 logger.info("Query is simple, no decomposition needed")
             
             metadata["query_analysis"]["query_decomposition"] = {
                 "skipped": False,
                 "is_complex": decomp_result.is_complex,
                 "sub_queries_count": len(decomp_result.sub_queries) if decomp_result.sub_queries else 0,
+                "search_sub_queries": search_sub_queries,
                 "reasoning": decomp_result.reasoning
             }
             metadata["query_analysis"]["stages_completed"].append("query_decomposition")
@@ -308,6 +314,7 @@ def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
                 "error": str(e)
             })
             sub_queries = None
+            search_sub_queries = None
             logger.warning("Treating query as simple after decomposition failure")
     
     # ========================================================================
@@ -325,11 +332,12 @@ def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
         "original_query": original_query,
         "normalized_query": normalized_query,
         "corrected_query": corrected_query,
-        "search_query": search_query,  # Optimized query for embedding
+        "search_query": search_query,  # Optimized query for embedding (main query)
         "input_source": input_source,
         "query_intent": query_intent,
         "target_collections": target_collections,
-        "sub_queries": sub_queries,
+        "sub_queries": sub_queries,  # Original sub-queries from decomposition
+        "search_sub_queries": search_sub_queries,  # Optimized sub-queries for embedding
         "language": language,
         "desired_output_language": desired_output_language,  # User's preferred result language
         "metadata": metadata
@@ -337,6 +345,7 @@ def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
     
     # Log summary
     decomp_status = f"skipped ({skip_reason[:30]}...)" if skip_decomposition else f"{len(sub_queries) if sub_queries else 0} sub-queries"
+    search_sub_q_str = f", search_sub_queries={search_sub_queries}" if search_sub_queries else ""
     logger.info(
         f"\n{'='*60}\n"
         f"ANALYSIS SUMMARY\n"
@@ -350,7 +359,7 @@ def query_analysis_agent(state: AgentState) -> Dict[str, Any]:
         f"  Input Source: {input_source}\n"
         f"  Intent:       {query_intent}\n"
         f"  Collections:  {target_collections}\n"
-        f"  Decomposition: {decomp_status}\n"
+        f"  Decomposition: {decomp_status}{search_sub_q_str}\n"
         f"  Errors:       {errors_count}\n"
         f"{'='*60}"
     )

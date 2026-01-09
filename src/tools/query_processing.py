@@ -164,6 +164,7 @@ class QueryDecompositionOutput(BaseModel):
     
     is_complex: bool = Field(description="Whether the query is complex and needs decomposition")
     sub_queries: List[str] = Field(default_factory=list, description="List of atomic sub-queries")
+    search_sub_queries: List[str] = Field(default_factory=list, description="Optimized sub-queries for embedding (stripped of question words)")
     reasoning: str = Field(description="Explanation of the decomposition strategy")
     
     @field_validator('sub_queries')
@@ -173,6 +174,60 @@ class QueryDecompositionOutput(BaseModel):
         if is_complex and len(v) == 0:
             raise ValueError("Complex queries must have at least one sub-query")
         return v
+
+
+# ============================================================================
+# Helper: Extract Search Query (for embedding optimization)
+# ============================================================================
+
+def extract_search_query(text: str) -> str:
+    """
+    Extract searchable content from a query by stripping question words and meta-terms.
+    
+    This is used to optimize queries for embedding search - the vector database
+    contains hadith texts, not questions.
+    
+    Args:
+        text: The query text to optimize
+        
+    Returns:
+        Optimized query string for embedding search
+    """
+    import re
+    
+    # Patterns to remove (order matters - more specific first)
+    patterns = [
+        # Arabic question phrases
+        r'^(من\s+هو|ما\s+هو|ما\s+هي|من\s+هي|ما\s+حكم|ماهو|ماهي)\s+',
+        # Arabic question words
+        r'^(من|ما|هل|أين|كيف|متى|لماذا|ماذا)\s+',
+        # Arabic meta-terms about hadith (keep the text, remove the meta)
+        r'(راوي|سند|متن|إسناد|حديث)\s+',
+        # Arabic action verbs
+        r'^(أريد|أبحث\s+عن|أعطني|اعطني)\s+',
+        # Connecting words
+        r'^(عن|في|على)\s+',
+        # English question words
+        r'^(who\s+is|what\s+is|what\s+are|how\s+is|where\s+is)\s+',
+        r'^(who|what|which|where|when|why|how)\s+',
+        # English meta-terms
+        r'(narrator|chain|isnad|matn|hadith)\s+(of|about)?\s*',
+        # English action verbs
+        r'^(find|search|give\s+me|show\s+me|tell\s+me)\s+',
+        # English articles and connectors
+        r'^(the|a|an)\s+',
+        r'\s+(the|a|an)\s+',
+    ]
+    
+    result = text.strip()
+    for pattern in patterns:
+        result = re.sub(pattern, '', result, flags=re.IGNORECASE)
+    
+    # Clean up extra whitespace
+    result = re.sub(r'\s+', ' ', result).strip()
+    
+    # If we stripped everything, return original
+    return result if result else text.strip()
 
 
 # ============================================================================
@@ -499,6 +554,7 @@ def query_decomposition_tool(query: str) -> QueryDecompositionOutput:
     The system ONLY retrieves hadiths - never create sub-queries for explanations.
     
     Uses centralized prompts with Chain-of-Thought reasoning.
+    Also generates search_sub_queries optimized for embedding (stripped of question words).
     """
     logger.info(f"Analyzing query complexity: {query[:100]}...")
     
@@ -517,9 +573,19 @@ def query_decomposition_tool(query: str) -> QueryDecompositionOutput:
         )
         
         parsed = parse_json_response(response)
+        
+        # Generate search_sub_queries by optimizing each sub_query for embedding
+        sub_queries = parsed.get("sub_queries", [])
+        search_sub_queries = [extract_search_query(sq) for sq in sub_queries]
+        parsed["search_sub_queries"] = search_sub_queries
+        
         result = QueryDecompositionOutput(**parsed)
         
-        logger.info(f"Query decomposition: is_complex={result.is_complex}, sub_queries_count={len(result.sub_queries)}")
+        logger.info(
+            f"Query decomposition: is_complex={result.is_complex}, "
+            f"sub_queries_count={len(result.sub_queries)}, "
+            f"search_sub_queries={result.search_sub_queries}"
+        )
         return result
         
     except Exception as e:
@@ -527,6 +593,7 @@ def query_decomposition_tool(query: str) -> QueryDecompositionOutput:
         return QueryDecompositionOutput(
             is_complex=False,
             sub_queries=[],
+            search_sub_queries=[],
             reasoning="Decomposition failed, treating as simple query"
         )
 

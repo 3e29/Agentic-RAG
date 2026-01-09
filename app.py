@@ -30,7 +30,6 @@ from src.agents.retrieval import retrieval_agent
 # Page config
 st.set_page_config(
     page_title="Hadith RAG System",
-    page_icon="📚",
     layout="wide",
 )
 
@@ -119,7 +118,7 @@ def build_execution_graph(results: Dict[str, Any]) -> str:
         edge [fontname="Arial", fontsize=9];
         
         // Start node
-        start [label="🚀 Start" shape=circle style="filled" fillcolor="#4169E1" fontcolor="white"];
+        start [label="Start" shape=circle style="filled" fillcolor="#4169E1" fontcolor="white"];
         
         // Query Analysis Stage
         subgraph cluster_analysis {
@@ -150,7 +149,7 @@ def build_execution_graph(results: Dict[str, Any]) -> str:
     if is_metadata_query:
         dot += '''
             ret_router [label="Intent Router" ''' + executed_style + '''];
-            ret_metadata [label="📊 Metadata Query\\n(longest/shortest)" ''' + executed_style + '''];
+            ret_metadata [label="Metadata Query\\n(longest/shortest)" ''' + executed_style + '''];
             ret_extract [label="Extract Filters\\n(narrator, chapter)" ''' + executed_style + '''];
             ret_resolve [label="Resolve Chapter ID" ''' + executed_style + '''];
             ret_repo [label="Repository Query" ''' + executed_style + '''];
@@ -158,14 +157,14 @@ def build_execution_graph(results: Dict[str, Any]) -> str:
     elif is_user_text:
         dot += '''
             ret_router [label="Intent Router" ''' + executed_style + '''];
-            ret_user [label="👤 User Text\\nProcessor" ''' + executed_style + '''];
+            ret_user [label="User Text\\nProcessor" ''' + executed_style + '''];
             ret_similarity [label="Find Similar\\nHadiths" ''' + executed_style + '''];
         '''
     else:
         # Autonomous search - show iterations
         dot += '''
             ret_router [label="Intent Router" ''' + executed_style + '''];
-            ret_orchestrator [label="🎯 Search\\nOrchestrator" ''' + executed_style + '''];
+            ret_orchestrator [label="Search\\nOrchestrator" ''' + executed_style + '''];
         '''
         
         # Add iteration nodes based on actual execution
@@ -173,14 +172,14 @@ def build_execution_graph(results: Dict[str, Any]) -> str:
             for i, iteration in enumerate(iterations[:5]):  # Limit to 5 iterations
                 action = iteration.get("action", "unknown")
                 action_labels = {
-                    "expand_query": "🔄 Expand Query",
-                    "extract_filters": "🏷️ Extract Filters",
-                    "find_chapter": "📖 Find Chapter",
-                    "keyword_search": "🔤 Keyword Search",
-                    "semantic_search": "🧠 Semantic Search",
-                    "hybrid_search": "⚡ Hybrid Search",
-                    "relax_filters": "🔓 Relax Filters",
-                    "finish": "✅ Finish",
+                    "expand_query": "Expand Query",
+                    "extract_filters": "Extract Filters",
+                    "find_chapter": "Find Chapter",
+                    "keyword_search": "Keyword Search",
+                    "semantic_search": "Semantic Search",
+                    "hybrid_search": "Hybrid Search",
+                    "relax_filters": "Relax Filters",
+                    "finish": "Finish",
                 }
                 label = action_labels.get(action, action)
                 dot += f'''
@@ -189,13 +188,13 @@ def build_execution_graph(results: Dict[str, Any]) -> str:
         else:
             # Default autonomous flow
             dot += '''
-            ret_hybrid [label="⚡ Hybrid Search" ''' + executed_style + '''];
+            ret_hybrid [label="Hybrid Search" ''' + executed_style + '''];
             '''
     
     # Aggregation and output
     dot += '''
-            ret_aggregate [label="📦 Aggregate\\n& Rerank" ''' + executed_style + '''];
-            ret_reassemble [label="🔧 Reassemble\\nChunks" ''' + executed_style + '''];
+            ret_aggregate [label="Aggregate\\n& Rerank" ''' + executed_style + '''];
+            ret_reassemble [label="Reassemble\\nChunks" ''' + executed_style + '''];
         }
         
         // Evaluation Agent Stage
@@ -204,14 +203,14 @@ def build_execution_graph(results: Dict[str, Any]) -> str:
             style=rounded;
             bgcolor="#E8F5E9";
             
-            eval_quality [label="📊 Quality\\nAssessment" ''' + executed_style + '''];
-            eval_gaps [label="🔍 Gap\\nIdentification" ''' + executed_style + '''];
-            eval_grounding [label="⚓ Grounding\\nValidation" ''' + executed_style + '''];
-            eval_decision [label="''' + ("✅ STOP" if eval_status == "STOP" else "🔄 CONTINUE") + '''\\n(confidence: ''' + f"{confidence_score:.2f}" + ''')" ''' + eval_decision_style + '''];
+            eval_quality [label="Quality\\nAssessment" ''' + executed_style + '''];
+            eval_gaps [label="Gap\\nIdentification" ''' + executed_style + '''];
+            eval_grounding [label="Grounding\\nValidation" ''' + executed_style + '''];
+            eval_decision [label="''' + ("STOP" if eval_status == "STOP" else "CONTINUE") + '''\\n(confidence: ''' + f"{confidence_score:.2f}" + ''')" ''' + eval_decision_style + '''];
         }
         
         // End node
-        end [label="📚 Results" shape=circle style="filled" fillcolor="#228B22" fontcolor="white"];
+        end [label="Results" shape=circle style="filled" fillcolor="#228B22" fontcolor="white"];
         
         // Edges - Analysis flow
         start -> qa_input;
@@ -289,11 +288,11 @@ def render_sidebar_graph(results: Optional[Dict[str, Any]] = None):
             rankdir=TB;
             node [shape=box, fontname="Arial", fontsize=10];
             
-            start [label="🚀 Start" shape=circle style="filled" fillcolor="#4169E1" fontcolor="white"];
+            start [label="Start" shape=circle style="filled" fillcolor="#4169E1" fontcolor="white"];
             qa [label="Query Analysis\\nAgent" style="filled" fillcolor="#E6F3FF"];
             ret [label="Retrieval\\nAgent" style="filled" fillcolor="#FFF3E6"];
             eval [label="Evaluation\\nAgent" style="filled" fillcolor="#E8F5E9"];
-            end [label="📚 Results" shape=circle style="filled" fillcolor="#D3D3D3"];
+            end [label="Results" shape=circle style="filled" fillcolor="#D3D3D3"];
             
             start -> qa [label="query"];
             qa -> ret [label="state"];
@@ -309,9 +308,9 @@ def render_sidebar_graph(results: Optional[Dict[str, Any]] = None):
         # Legend
         st.sidebar.markdown("---")
         st.sidebar.markdown("**Legend:**")
-        st.sidebar.markdown("🟢 Executed node")
-        st.sidebar.markdown("🟠 Continue (retry)")
-        st.sidebar.markdown("⚪ Skipped node")
+        st.sidebar.markdown("Executed node")
+        st.sidebar.markdown("Continue (retry)")
+        st.sidebar.markdown("Skipped node")
     else:
         # Build and render execution graph
         dot = build_execution_graph(results)
@@ -346,8 +345,12 @@ def render_sidebar_graph(results: Optional[Dict[str, Any]] = None):
             grounding = evaluation_meta.get("grounding_score", 0.0)
             coverage = evaluation_meta.get("coverage_score", 0.0)
             
-            status_color = "🟢" if eval_status == "STOP" else "🟠"
+            status_color = "" if eval_status == "STOP" else ""
             st.sidebar.markdown(f"**Status:** {status_color} {eval_status}")
+            
+            # Show iteration count
+            eval_iteration = evaluation_meta.get("iteration", 1)
+            st.sidebar.markdown(f"**Iterations:** {eval_iteration}")
             
             col1, col2 = st.sidebar.columns(2)
             with col1:
@@ -366,8 +369,8 @@ def render_sidebar_graph(results: Optional[Dict[str, Any]] = None):
 
 @traceable(name="full_pipeline_run")
 def run_pipeline(query: str):
-    """Run the full pipeline and return results."""
-    from src.agents.evaluation import evaluation_agent
+    """Run the full pipeline using LangGraph workflow with evaluation loop."""
+    from src.graph.workflow import create_workflow
     
     results = {
         "query": query,
@@ -377,54 +380,76 @@ def run_pipeline(query: str):
         "timings": {},
     }
     
-    # Stage 1: Query Analysis
-    start = time.time()
-    state = {"original_query": query}
+    start_total = time.time()
     
     try:
-        analysis_result = query_analysis_agent(state)
-        results["analysis"] = {
-            "intent": analysis_result.get("query_intent", "unknown"),
-            "corrected_query": analysis_result.get("corrected_query", query),
-            "search_query": analysis_result.get("search_query"),  # Optimized for embedding
-            "language": analysis_result.get("language", "unknown"),
-            "desired_output_language": analysis_result.get("desired_output_language"),
-            "target_collections": analysis_result.get("target_collections", []),
-            "sub_queries": analysis_result.get("sub_queries"),
+        # Create workflow with evaluation enabled
+        workflow = create_workflow(enable_evaluation=True)
+        
+        # Initialize state
+        initial_state = {
+            "original_query": query,
+            "normalized_query": None,
+            "corrected_query": None,
+            "search_query": None,
+            "input_source": None,
+            "query_intent": None,
+            "target_collections": None,
+            "sub_queries": None,
+            "search_sub_queries": None,  # Optimized sub-queries for embedding
+            "retrieved_docs": None,
+            "evaluation_feedback": None,
+            "confidence_score": None,
+            "missing_information_gaps": None,
+            "language": None,
+            "desired_output_language": None,
+            "metadata": {},
         }
-        state.update(analysis_result)
-        results["timings"]["analysis"] = time.time() - start
-    except Exception as e:
-        results["analysis"] = {"error": str(e)}
-        results["timings"]["analysis"] = time.time() - start
-        return results
-    
-    # Stage 2: Retrieval
-    start = time.time()
-    try:
-        retrieval_result = retrieval_agent(state)
-        results["documents"] = retrieval_result.get("retrieved_docs", [])
-        results["metadata"] = retrieval_result.get("metadata", {})
-        state.update(retrieval_result)
-        results["timings"]["retrieval"] = time.time() - start
+        
+        # Execute workflow (includes evaluation loop)
+        final_state = workflow.invoke(initial_state)
+        
+        # Extract results from final state
+        results["analysis"] = {
+            "intent": final_state.get("query_intent", "unknown"),
+            "corrected_query": final_state.get("corrected_query", query),
+            "search_query": final_state.get("search_query"),
+            "language": final_state.get("language", "unknown"),
+            "desired_output_language": final_state.get("desired_output_language"),
+            "target_collections": final_state.get("target_collections", []),
+            "sub_queries": final_state.get("sub_queries"),
+            "search_sub_queries": final_state.get("search_sub_queries"),  # Add this too
+        }
+        
+        results["documents"] = final_state.get("retrieved_docs", [])
+        results["metadata"] = final_state.get("metadata", {})
+        results["evaluation_feedback"] = final_state.get("evaluation_feedback")
+        results["confidence_score"] = final_state.get("confidence_score")
+        
+        # Calculate total time
+        results["timings"]["total"] = time.time() - start_total
+        
+        # Extract individual timings from metadata if available
+        query_analysis_meta = results["metadata"].get("query_analysis", {})
+        retrieval_meta = results["metadata"].get("retrieval", {})
+        evaluation_meta = results["metadata"].get("evaluation", {})
+        
+        # Rough time estimates from metadata
+        if retrieval_meta.get("total_execution_time_ms"):
+            results["timings"]["retrieval"] = retrieval_meta["total_execution_time_ms"] / 1000
+        if evaluation_meta.get("execution_time_ms"):
+            results["timings"]["evaluation"] = evaluation_meta["execution_time_ms"] / 1000
+        
+        # Analysis time = total - retrieval - evaluation (approximate)
+        retrieval_time = results["timings"].get("retrieval", 0)
+        eval_time = results["timings"].get("evaluation", 0)
+        results["timings"]["analysis"] = max(0, results["timings"]["total"] - retrieval_time - eval_time)
+        
     except Exception as e:
         results["metadata"]["error"] = str(e)
-        results["timings"]["retrieval"] = time.time() - start
-        return results
-    
-    # Stage 3: Evaluation
-    start = time.time()
-    try:
-        evaluation_result = evaluation_agent(state)
-        # Merge evaluation metadata into results
-        eval_metadata = evaluation_result.get("metadata", {}).get("evaluation", {})
-        results["metadata"]["evaluation"] = eval_metadata
-        results["evaluation_feedback"] = evaluation_result.get("evaluation_feedback")
-        results["confidence_score"] = evaluation_result.get("confidence_score")
-        results["timings"]["evaluation"] = time.time() - start
-    except Exception as e:
-        results["metadata"]["evaluation"] = {"error": str(e)}
-        results["timings"]["evaluation"] = time.time() - start
+        results["timings"]["total"] = time.time() - start_total
+        import traceback
+        traceback.print_exc()
     
     return results
 
@@ -445,18 +470,18 @@ def display_analysis(analysis: dict):
         st.metric("Output Language", analysis.get("desired_output_language", "Auto"))
     
     if analysis.get("corrected_query") != st.session_state.get("last_query"):
-        st.info(f"📝 Corrected Query: {analysis.get('corrected_query')}")
+        st.info(f"Corrected Query: {analysis.get('corrected_query')}")
     
     # Show search query (optimized for embedding)
     search_query = analysis.get("search_query")
     if search_query and search_query != analysis.get("corrected_query"):
-        st.success(f"🔎 Search Query (for embedding): {search_query}")
+        st.success(f"Search Query (for embedding): {search_query}")
     
     if analysis.get("target_collections"):
-        st.write(f"🎯 Target Collections: {', '.join(analysis['target_collections'])}")
+        st.write(f"Target Collections: {', '.join(analysis['target_collections'])}")
     
     if analysis.get("sub_queries") and len(analysis["sub_queries"]) > 1:
-        st.write(f"🔀 Decomposed into {len(analysis['sub_queries'])} sub-queries")
+        st.write(f"Decomposed into {len(analysis['sub_queries'])} sub-queries")
 
 
 def display_document(doc, index: int):
@@ -470,19 +495,19 @@ def display_document(doc, index: int):
             st.write(f"**Hadith #{doc.hadith_id}**")
         with col2:
             collection = doc.collection or "Unknown"
-            st.write(f"📚 {collection}")
+            st.write(f"{collection}")
         with col3:
-            st.write(f"🌐 {doc.language}")
+            st.write(f"{doc.language}")
         with col4:
             if doc.score:
-                st.write(f"⭐ {doc.score:.2f}")
+                st.write(f"{doc.score:.2f}")
         
         # Chapter info
         chapter_en = getattr(doc, 'chapter_title_en', None)
         chapter_ar = getattr(doc, 'chapter_title_ar', None)
         chapter = chapter_en or chapter_ar
         if chapter:
-            st.caption(f"📖 Chapter: {chapter}")
+            st.caption(f"Chapter: {chapter}")
         
         # Hadith text
         if is_arabic:
@@ -491,7 +516,7 @@ def display_document(doc, index: int):
             st.markdown(f'<div class="hadith-english">{doc.text}</div>', unsafe_allow_html=True)
         
         # Additional metadata
-        with st.expander("📋 More Details"):
+        with st.expander("More Details"):
             meta_cols = st.columns(4)
             with meta_cols[0]:
                 st.write(f"**Book:** {doc.book_id or 'N/A'}")
@@ -506,7 +531,7 @@ def display_document(doc, index: int):
 
 
 def main():
-    st.title("📚 Hadith RAG System")
+    st.title("Hadith RAG System")
     st.caption("Test the full pipeline: Query Analysis → Retrieval")
     
     # Initialize session state for results
@@ -524,7 +549,7 @@ def main():
     
     # Main query input
     query = st.text_input(
-        "🔍 Enter your query",
+        "Enter your query",
         placeholder="e.g., ما هو حديث النية؟ / What are the hadiths about patience?",
         key="query_input"
     )
@@ -546,7 +571,7 @@ def main():
             st.rerun()
     
     # Search button - only run when button is clicked (not on every rerun)
-    search_clicked = st.button("🔎 Search", type="primary", use_container_width=True)
+    search_clicked = st.button("Search", type="primary", use_container_width=True)
     
     # Check if we should run a search (button clicked or flagged from example)
     should_search = search_clicked or st.session_state.get("run_search", False)
@@ -573,12 +598,12 @@ def main():
         results = st.session_state.pipeline_results
         
         # Display Analysis Results
-        st.markdown('<div class="stage-header">📊 Stage 1: Query Analysis</div>', unsafe_allow_html=True)
+        st.markdown('<div class="stage-header">Stage 1: Query Analysis</div>', unsafe_allow_html=True)
         if results["analysis"]:
             display_analysis(results["analysis"])
         
         # Display Retrieval Results
-        st.markdown('<div class="stage-header">📚 Stage 2: Retrieval Results</div>', unsafe_allow_html=True)
+        st.markdown('<div class="stage-header">Stage 2: Retrieval Results</div>', unsafe_allow_html=True)
         
         documents = results.get("documents", [])
         
@@ -592,13 +617,13 @@ def main():
         
         # Display Evaluation Results
         if results.get("evaluation_feedback"):
-            st.markdown('<div class="stage-header">🔍 Stage 3: Evaluation Results</div>', unsafe_allow_html=True)
+            st.markdown('<div class="stage-header">Stage 3: Evaluation Results</div>', unsafe_allow_html=True)
             eval_meta = results.get("metadata", {}).get("evaluation", {})
             
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 status = eval_meta.get("status", "N/A")
-                status_icon = "✅" if status == "STOP" else "🔄"
+                status_icon = "" if status == "STOP" else ""
                 st.metric("Status", f"{status_icon} {status}")
             with col2:
                 st.metric("Confidence", f"{results.get('confidence_score', 0):.2f}")
@@ -608,7 +633,7 @@ def main():
                 st.metric("Grounding", f"{eval_meta.get('grounding_score', 0) or 0:.2f}")
             
             if results.get("evaluation_feedback"):
-                st.info(f"📋 **Feedback:** {results['evaluation_feedback']}")
+                st.info(f"**Feedback:** {results['evaluation_feedback']}")
         
         # Timing info
         if show_timings and results.get("timings"):
@@ -627,7 +652,7 @@ def main():
         
         # Metadata (optional)
         if show_metadata and results.get("metadata"):
-            with st.expander("🔧 Full Pipeline Metadata"):
+            with st.expander("Full Pipeline Metadata"):
                 st.json(results["metadata"])
     elif not st.session_state.get("last_query"):
         st.info("Please enter a query to search.")

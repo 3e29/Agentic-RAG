@@ -118,7 +118,8 @@ class AgentState(TypedDict):
     # -------------------------------------------------------------------------
     # Decomposition Fields
     # -------------------------------------------------------------------------
-    sub_queries: Optional[List[str]]
+    sub_queries: Optional[List[str]]  # Original sub-queries from decomposition
+    search_sub_queries: Optional[List[str]]  # Optimized sub-queries for embedding (stripped of question words)
     
     # -------------------------------------------------------------------------
     # Retrieval Fields

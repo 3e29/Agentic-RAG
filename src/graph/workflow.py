@@ -32,7 +32,7 @@ from src.agents.retrieval import retrieval_agent
 from src.agents.evaluation import evaluation_agent
 
 # Configuration
-MAX_WORKFLOW_ITERATIONS = 3  # Maximum retrieval-evaluation cycles
+MAX_WORKFLOW_ITERATIONS = 1  # Maximum retrieval-evaluation cycles (allows 2 retries)
 ENABLE_EVALUATION_AGENT = True  # Set to True to enable evaluation loop
 
 
@@ -162,6 +162,7 @@ def run_workflow(query: str) -> AgentState:
         "query_intent": None,
         "target_collections": None,
         "sub_queries": None,
+        "search_sub_queries": None,  # Optimized sub-queries for embedding
         "retrieved_docs": None,
         "evaluation_feedback": None,
         "confidence_score": None,

@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 # Evaluation thresholds
 MIN_QUALITY_SCORE_TO_STOP = 0.65      # Minimum quality to stop searching
 MIN_GROUNDING_SCORE_TO_STOP = 0.5     # Minimum grounding to stop
-MAX_EVAL_ITERATIONS = 3               # Max evaluation cycles before force-stop
+MAX_EVAL_ITERATIONS = 2               # Max evaluation cycles before force-stop
 MIN_DOCS_FOR_EVALUATION = 1           # Minimum docs needed to evaluate
 
 # Weights for combined score
@@ -73,7 +73,7 @@ COVERAGE_WEIGHT = 0.2
 # ============================================================================
 
 @traceable(name="evaluation_agent", run_type="chain")
-def evaluation_agent(state: AgentState) -> Dict[str, Any]:
+def evaluation_agent(state: AgentState, **kwargs) -> Dict[str, Any]:
     """
     Evaluation Agent node for LangGraph workflow.
     
@@ -82,6 +82,7 @@ def evaluation_agent(state: AgentState) -> Dict[str, Any]:
     
     Args:
         state: Current AgentState with retrieved_docs and query
+        **kwargs: Additional arguments from LangGraph (e.g., config)
         
     Returns:
         Dictionary with evaluation results and updated metadata:
@@ -93,14 +94,25 @@ def evaluation_agent(state: AgentState) -> Dict[str, Any]:
     start_time = time.time()
     
     # Extract inputs from state
-    query = (
+    # For evaluation, use ORIGINAL query to check if all parts are covered
+    # (especially for compound queries that were decomposed)
+    original_query = state.get("original_query", "")
+    corrected_query = (
         state.get("corrected_query") or
         state.get("normalized_query") or
-        state.get("original_query", "")
+        original_query
     )
+    
+    # Use original query for comprehensive evaluation of compound queries
+    # This ensures we check if BOTH parts of "X و Y" are covered
+    query_for_evaluation = original_query or corrected_query
     
     retrieved_docs = state.get("retrieved_docs", [])
     metadata = state.get("metadata", {}) or {}
+    
+    # Track sub-queries for better evaluation context
+    sub_queries = state.get("sub_queries", [])
+    search_sub_queries = state.get("search_sub_queries", [])
     
     # Get current iteration count
     eval_metadata = metadata.get("evaluation", {})
@@ -108,15 +120,16 @@ def evaluation_agent(state: AgentState) -> Dict[str, Any]:
     
     logger.info(
         f"Evaluation Agent starting (iteration {current_iteration}): "
-        f"query='{query[:50]}...', docs={len(retrieved_docs)}"
+        f"query='{query_for_evaluation[:50]}...', docs={len(retrieved_docs)}, "
+        f"sub_queries={len(sub_queries) if sub_queries else 0}"
     )
     
     # Convert dicts to Document objects if needed
     documents = _ensure_documents(retrieved_docs)
     
-    # Run evaluation pipeline
+    # Run evaluation pipeline with original query for comprehensive coverage check
     evaluation_result = _evaluate_results(
-        query=query,
+        query=query_for_evaluation,
         documents=documents,
         current_iteration=current_iteration,
         max_iterations=MAX_EVAL_ITERATIONS,
@@ -162,11 +175,15 @@ def evaluation_agent(state: AgentState) -> Dict[str, Any]:
         f"time={execution_time:.1f}ms"
     )
     
+    # Merge evaluation metadata with existing state metadata
+    existing_metadata = state.get("metadata", {}) or {}
+    merged_metadata = {**existing_metadata, **evaluation_metadata}
+    
     return {
         "evaluation_feedback": evaluation_result.feedback,
         "confidence_score": evaluation_result.confidence_score,
         "missing_information_gaps": gaps_list,
-        "metadata": evaluation_metadata,  # Only evaluation metadata, not merged
+        "metadata": merged_metadata,  # Merged metadata preserving retrieval info
     }
 
 
